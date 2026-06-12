@@ -1,0 +1,18 @@
+# Output pipeline
+output/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+
+# Node / React
+ui/node_modules/
+ui/dist/
+
+# OS
+.DS_Store
+Thumbs.db

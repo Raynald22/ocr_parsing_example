@@ -1,0 +1,26 @@
+# OCR + Parsing Learning Example - Indonesian Invoice
+# Python 3.8+
+#
+# Install dependencies:
+#   pip install -r requirements.txt
+#
+# ============================================================
+# PENTING: Tesseract OCR harus diinstall secara terpisah!
+# ============================================================
+#
+# 1. Download installer Tesseract untuk Windows:
+#    https://digi.bib.uni-mannheim.de/tesseract/
+#    (pilih file: tesseract-ocr-w64-setup-*.exe)
+#
+# 2. Saat install, centang "Additional language data" dan pilih "Indonesian"
+#    ATAU download manual ind.traineddata dari:
+#    https://github.com/tesseract-ocr/tessdata/blob/main/ind.traineddata
+#    lalu copy ke: C:\Program Files\Tesseract-OCR\tessdata\
+#
+# 3. Pastikan Tesseract ada di PATH, atau set path manual di src/ocr.py
+# ============================================================
+
+Pillow>=10.0.0
+pytesseract>=0.3.10
+opencv-python>=4.8.0
+numpy>=1.24.0
