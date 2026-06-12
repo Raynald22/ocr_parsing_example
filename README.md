@@ -19,12 +19,13 @@ Package yang diinstall: `Pillow`, `pytesseract`, `opencv-python`, `numpy`
 
 ### 2. Install Tesseract OCR (wajib, terpisah dari pip)
 
-Tesseract adalah engine OCR-nya. Harus diinstall manual:
+Tesseract adalah engine OCR-nya. Install sesuai sistem operasi:
 
-1. Download installer untuk Windows:
+#### Windows
+
+1. Download installer dari:
    **https://github.com/UB-Mannheim/tesseract/wiki**
-   Scroll ke bagian "The latest installers can be downloaded here" lalu klik
-   `tesseract-ocr-w64-setup-*.exe` (versi 64-bit)
+   Klik `tesseract-ocr-w64-setup-*.exe` (versi 64-bit)
 
 2. Jalankan installer. Saat muncul halaman "Choose Components", centang:
    - `Additional language data` → cari dan centang **Indonesian**
@@ -32,9 +33,27 @@ Tesseract adalah engine OCR-nya. Harus diinstall manual:
 3. Selesai install, Tesseract akan ada di:
    `C:\Program Files\Tesseract-OCR\tesseract.exe`
 
-> Jika lupa install bahasa Indonesia saat pertama kali, download manual:
-> `ind.traineddata` dari https://github.com/tesseract-ocr/tessdata/blob/main/ind.traineddata
+> Jika lupa install bahasa Indonesia: download `ind.traineddata` dari
+> https://github.com/tesseract-ocr/tessdata/blob/main/ind.traineddata
 > lalu copy ke `C:\Program Files\Tesseract-OCR\tessdata\`
+
+#### macOS
+
+Install via Homebrew (termasuk semua bahasa, termasuk Indonesia):
+
+```bash
+brew install tesseract tesseract-lang
+```
+
+Tesseract langsung tersedia di PATH setelah install — tidak perlu konfigurasi tambahan.
+
+#### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt install tesseract-ocr tesseract-ocr-ind
+```
+
+`tesseract-ocr-ind` adalah paket bahasa Indonesia untuk Tesseract.
 
 ---
 

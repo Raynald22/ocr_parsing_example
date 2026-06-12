@@ -23,7 +23,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from flask import Flask, jsonify, request, send_file
+from flask import Flask, Response, jsonify, request, send_file
 from flask_cors import CORS
 
 app = Flask(__name__)
@@ -136,8 +136,14 @@ def upload():
 
     suffix = Path(file.filename).suffix.lower()
     temp_path = OUTPUT / f"upload_temp{suffix}"
+    csv_temp  = None
     OUTPUT.mkdir(exist_ok=True)
     file.save(temp_path)
+
+    # CSV ground truth opsional
+    if "csv" in request.files and request.files["csv"].filename:
+        csv_temp = OUTPUT / "upload_gt_temp.csv"
+        request.files["csv"].save(csv_temp)
 
     try:
         # Import di sini agar tidak crash saat Tesseract belum terinstall
@@ -146,7 +152,10 @@ def upload():
         _sys.path.insert(0, str(Path(__file__).parent))
         from src.upload_processor import process_uploaded
 
-        result = process_uploaded(str(temp_path))
+        result = process_uploaded(
+            str(temp_path),
+            csv_path=str(csv_temp) if csv_temp else None,
+        )
         return jsonify(dataclasses.asdict(result))
 
     except ValueError as e:
@@ -166,6 +175,8 @@ def upload():
     finally:
         if temp_path.exists():
             temp_path.unlink()
+        if csv_temp and csv_temp.exists():
+            csv_temp.unlink()
 
 
 @app.get("/api/upload-result")
@@ -173,6 +184,17 @@ def upload_result():
     if not UPLOAD_RESULT.exists():
         return jsonify({"error": "Belum ada upload. Upload file terlebih dahulu."}), 404
     return send_file(UPLOAD_RESULT, mimetype="application/json")
+
+
+@app.get("/api/csv-template")
+def csv_template():
+    """Download template CSV ground truth kosong untuk diisi user."""
+    from src.upload_processor import CSV_TEMPLATE
+    return Response(
+        CSV_TEMPLATE,
+        mimetype="text/csv",
+        headers={"Content-Disposition": "attachment; filename=ground_truth_template.csv"},
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -10,8 +10,10 @@ export default function UploadView() {
   const [processing,  setProcessing]  = useState(false)
   const [result,      setResult]      = useState(null)
   const [error,       setError]       = useState(null)
-  const [step,        setStep]        = useState('')   // label langkah saat processing
-  const inputRef = useRef(null)
+  const [step,        setStep]        = useState('')
+  const [csvFile,     setCsvFile]     = useState(null)   // ground truth CSV opsional
+  const inputRef    = useRef(null)
+  const csvInputRef = useRef(null)
 
   // ── Upload handler ─────────────────────────────────────────────────────
 
@@ -30,6 +32,7 @@ export default function UploadView() {
 
     const form = new FormData()
     form.append('file', file)
+    if (csvFile) form.append('csv', csvFile)
 
     try {
       setStep('Preprocessing gambar (6 langkah)…')
@@ -119,6 +122,54 @@ export default function UploadView() {
         )}
       </div>
 
+      {/* ── Ground Truth CSV (opsional) ────────────────────────────────── */}
+      <div className="bg-white border border-slate-200 rounded-xl px-4 py-3">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-semibold text-slate-700">Ground Truth CSV <span className="font-normal text-slate-400">(opsional)</span></p>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Upload CSV berisi nilai field yang diketahui → skor CER yang akurat (bukan quality score)
+            </p>
+          </div>
+          <a
+            href="/api/csv-template"
+            download
+            className="shrink-0 text-xs text-blue-600 hover:underline whitespace-nowrap mt-0.5"
+          >
+            Download Template ↓
+          </a>
+        </div>
+
+        <div className="flex items-center gap-3 mt-2.5">
+          <input
+            ref={csvInputRef}
+            type="file"
+            accept=".csv"
+            className="hidden"
+            onChange={e => setCsvFile(e.target.files[0] || null)}
+          />
+          <button
+            onClick={() => csvInputRef.current?.click()}
+            disabled={processing}
+            className="text-xs px-3 py-1.5 border border-slate-300 rounded hover:bg-slate-50 text-slate-600 disabled:opacity-50"
+          >
+            Pilih CSV
+          </button>
+          {csvFile ? (
+            <div className="flex items-center gap-1.5 text-xs text-slate-600">
+              <span className="font-medium">{csvFile.name}</span>
+              <button
+                onClick={() => { setCsvFile(null); if (csvInputRef.current) csvInputRef.current.value = '' }}
+                className="text-slate-400 hover:text-red-500 leading-none"
+                title="Hapus"
+              >✕</button>
+            </div>
+          ) : (
+            <span className="text-xs text-slate-400">Belum ada file dipilih</span>
+          )}
+        </div>
+      </div>
+
       {/* ── Error ──────────────────────────────────────────────────────── */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
@@ -135,7 +186,7 @@ export default function UploadView() {
 // ── Komponen hasil ─────────────────────────────────────────────────────────
 
 function UploadResult({ result }) {
-  const { score, parsed_fields: pf, parsed_items, ocr_confidence,
+  const { score, cer_score, parsed_fields: pf, parsed_items, ocr_confidence,
           filename, elapsed_s, ocr_prep_text } = result
 
   return (
@@ -148,6 +199,12 @@ function UploadResult({ result }) {
         <span>Diproses dalam {elapsed_s}s</span>
         <span>•</span>
         <span>OCR confidence: {ocr_confidence.toFixed(1)}%</span>
+        {cer_score && (
+          <>
+            <span>•</span>
+            <span className="text-blue-600 font-medium">Mode: CER dengan ground truth</span>
+          </>
+        )}
       </div>
 
       {/* Grid utama: gambar | parsed | skor */}
@@ -196,8 +253,8 @@ function UploadResult({ result }) {
           </div>
         </div>
 
-        {/* Skor kualitas */}
-        <ScoreCard score={score} />
+        {/* Skor: CER jika ada CSV, quality score jika tidak */}
+        {cer_score ? <CerScoreCard cerScore={cer_score} /> : <ScoreCard score={score} />}
       </div>
 
       {/* Preprocessing steps */}
@@ -339,6 +396,81 @@ function PrepStepsRow({ images }) {
     </div>
   )
 }
+
+// ── CER Score Card (digunakan saat CSV ground truth diberikan) ─────────────
+
+function CerScoreCard({ cerScore }) {
+  const passes  = cerScore.passes_threshold
+  const pct     = (v) => (v * 100).toFixed(1) + '%'
+
+  const rowColor = (f) => {
+    if (f.exact_match)   return 'bg-green-50 text-green-800'
+    if (f.cer < 0.3)     return 'bg-amber-50 text-amber-800'
+    return 'bg-red-50 text-red-700'
+  }
+  const rowStatus = (f) => {
+    if (f.exact_match)  return 'EXACT'
+    if (f.cer < 1.0)    return `~${((1 - f.cer) * 100).toFixed(0)}%`
+    return 'MISS'
+  }
+
+  return (
+    <div className={`rounded-xl border shadow-sm flex flex-col ${
+      passes ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'
+    }`}>
+      <div className={`px-4 py-2.5 border-b font-semibold text-sm ${
+        passes ? 'border-green-200 text-green-800' : 'border-red-200 text-red-800'
+      }`}>
+        Skor CER (dengan ground truth)
+      </div>
+
+      <div className="px-4 py-4 flex flex-col gap-3 flex-1">
+        {/* Angka besar */}
+        <div className="text-center">
+          <p className={`text-4xl font-extrabold ${passes ? 'text-green-700' : 'text-red-700'}`}>
+            {pct(cerScore.char_accuracy)}
+          </p>
+          <span className={`text-xs font-bold px-3 py-1 rounded-full mt-2 inline-block ${
+            passes ? 'bg-green-200 text-green-800' : 'bg-red-200 text-red-800'
+          }`}>
+            {passes ? 'LULUS (>=95%)' : 'TIDAK LULUS (<95%)'}
+          </span>
+        </div>
+
+        {/* Progress bar */}
+        <div className="bg-white rounded-full h-2.5 overflow-hidden">
+          <div
+            className={`h-2.5 rounded-full ${passes ? 'bg-green-500' : 'bg-red-500'}`}
+            style={{ width: pct(Math.min(cerScore.char_accuracy, 1)) }}
+          />
+        </div>
+
+        {/* Per-field tabel */}
+        <div className="bg-white rounded-lg overflow-hidden text-xs border border-slate-100">
+          <div className="grid grid-cols-3 px-2 py-1 text-slate-400 font-medium border-b border-slate-100">
+            <span>Field</span>
+            <span className="truncate">Hasil OCR</span>
+            <span className="text-right">Status</span>
+          </div>
+          {cerScore.fields.map(f => (
+            <div key={f.field} className={`grid grid-cols-3 px-2 py-1 ${rowColor(f)}`}>
+              <span className="font-medium truncate">{f.field}</span>
+              <span className="truncate opacity-80">{f.got || '—'}</span>
+              <span className="text-right font-bold">{rowStatus(f)}</span>
+            </div>
+          ))}
+        </div>
+
+        {/* Stats baris bawah */}
+        <div className="flex justify-between text-xs text-slate-500">
+          <span>Exact match: {pct(cerScore.exact_match_rate)}</span>
+          <span>CER: {cerScore.overall_cer.toFixed(3)}</span>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 
 function ParsedRow({ label, value, mono = false, bold = false }) {
   const missing = value == null

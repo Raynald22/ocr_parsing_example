@@ -9,17 +9,25 @@ Konfigurasi Tesseract yang digunakan:
 """
 
 import os
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from PIL import Image
 
-# Path default Tesseract di Windows
+# Path default Tesseract per platform
 _TESSERACT_PATHS = [
+    # Windows
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
     os.path.expanduser(r"~\AppData\Local\Programs\Tesseract-OCR\tesseract.exe"),
+    # macOS — Homebrew Intel Mac
+    "/usr/local/bin/tesseract",
+    # macOS — Homebrew Apple Silicon (M1/M2/M3)
+    "/opt/homebrew/bin/tesseract",
+    # Linux
+    "/usr/bin/tesseract",
 ]
 
 TESSERACT_CONFIG = "--oem 3 --psm 6"
@@ -67,17 +75,28 @@ def configure_tesseract(path: Optional[str] = None) -> None:
             pytesseract.pytesseract.tesseract_cmd = candidate
             return
 
+    # Fallback: cari di PATH system (umum di Mac/Linux setelah install Homebrew/apt)
+    in_path = shutil.which("tesseract")
+    if in_path:
+        pytesseract.pytesseract.tesseract_cmd = in_path
+        return
+
     raise RuntimeError(
         "\n"
-        "  Tesseract tidak ditemukan!\n"
-        "  Langkah instalasi:\n"
-        "  1. Download installer dari:\n"
-        "     https://digi.bib.uni-mannheim.de/tesseract/\n"
-        "     (pilih file: tesseract-ocr-w64-setup-*.exe)\n"
-        "  2. Saat install, centang 'Additional language data' → Indonesian\n"
-        "  3. Jalankan ulang script ini\n"
+        "  Tesseract OCR tidak ditemukan. Install sesuai sistem operasi:\n"
         "\n"
-        "  Atau set path manual: configure_tesseract(path=r'C:\\...\\tesseract.exe')\n"
+        "  Windows:\n"
+        "    Download dari: https://github.com/UB-Mannheim/tesseract/wiki\n"
+        "    Saat install, centang 'Additional language data' -> Indonesian\n"
+        "\n"
+        "  macOS (Homebrew):\n"
+        "    brew install tesseract tesseract-lang\n"
+        "\n"
+        "  Linux (Debian/Ubuntu):\n"
+        "    sudo apt install tesseract-ocr tesseract-ocr-ind\n"
+        "\n"
+        "  Atau set path manual:\n"
+        "    configure_tesseract(path='/usr/local/bin/tesseract')\n"
     )
 
 

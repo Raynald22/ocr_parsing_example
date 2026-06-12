@@ -14,7 +14,9 @@ Format yang didukung (via Pillow, tanpa dependency tambahan):
   PNG, JPG, JPEG, BMP, TIFF, TIF, WEBP
 """
 
+import csv as _csv
 import json
+import re
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -22,6 +24,7 @@ from typing import List, Optional
 
 from PIL import Image
 
+from src.invoice_generator import InvoiceData
 from src.ocr import configure_tesseract, run_ocr_with_confidence, OcrResult
 from src.parser import parse_invoice, ParsedInvoice
 from src.preprocessor import preprocess_for_ocr
@@ -63,19 +66,26 @@ class UploadResult:
     parsed_items:   list         # List[ParsedLineItem] sebagai list of dict
     score:          UploadQualityScore
     elapsed_s:      float
+    cer_score:      Optional[dict] = None  # score_to_dict(InvoiceScore) jika CSV diberikan
 
 
 # ---------------------------------------------------------------------------
 # Fungsi utama
 # ---------------------------------------------------------------------------
 
-def process_uploaded(file_path: str, lang: str = "ind+eng") -> UploadResult:
+def process_uploaded(
+    file_path: str,
+    lang:      str = "ind+eng",
+    csv_path:  Optional[str] = None,
+) -> UploadResult:
     """
     Jalankan pipeline lengkap pada file yang diupload.
 
     Args:
         file_path: Path ke file gambar (string atau Path)
         lang:      Bahasa Tesseract (default "ind+eng")
+        csv_path:  Path ke CSV ground truth (opsional). Jika diberikan,
+                   hasil parsing di-score dengan CER menggunakan nilai CSV.
 
     Returns:
         UploadResult dengan semua hasil, juga disimpan ke output/upload_result.json
@@ -127,8 +137,15 @@ def process_uploaded(file_path: str, lang: str = "ind+eng") -> UploadResult:
     # 5. Parse teks hasil OCR
     parsed = parse_invoice(ocr_prep.text)
 
-    # 6. Hitung skor kualitas
+    # 6. Hitung skor kualitas (selalu dihitung)
     score = _compute_score(ocr_prep, parsed)
+
+    # 7. Hitung skor CER jika ground truth CSV diberikan
+    cer_score = None
+    if csv_path:
+        from src.scorer import score_invoice, score_to_dict
+        ground_truth = parse_ground_truth_csv(csv_path)
+        cer_score = score_to_dict(score_invoice(ground_truth, parsed))
 
     elapsed = round(time.time() - start, 2)
 
@@ -169,6 +186,7 @@ def process_uploaded(file_path: str, lang: str = "ind+eng") -> UploadResult:
         parsed_items=parsed_items,
         score=score,
         elapsed_s=elapsed,
+        cer_score=cer_score,
     )
 
     # Persist ke JSON agar bisa di-load kembali saat app restart
@@ -182,6 +200,70 @@ def process_uploaded(file_path: str, lang: str = "ind+eng") -> UploadResult:
 
 # ---------------------------------------------------------------------------
 # Scoring
+# ---------------------------------------------------------------------------
+
+# ---------------------------------------------------------------------------
+# Ground truth CSV
+# ---------------------------------------------------------------------------
+
+_NUMERIC_FIELDS = {"subtotal", "ppn", "total"}
+
+_GT_FIELDS = [
+    "nomor_faktur", "tanggal", "jatuh_tempo",
+    "nama_penjual", "npwp_penjual",
+    "nama_pembeli", "npwp_pembeli", "alamat_pembeli",
+    "subtotal", "ppn", "total",
+]
+
+# Template CSV yang bisa didownload user
+CSV_TEMPLATE = "field,value\n" + "\n".join(f"{f}," for f in _GT_FIELDS) + "\n"
+
+
+def parse_ground_truth_csv(csv_path: str) -> InvoiceData:
+    """
+    Baca CSV ground truth dan buat InvoiceData untuk di-score.
+
+    Format CSV:
+        field,value
+        nomor_faktur,INV-2024/001/JAN
+        subtotal,6400000
+        ...
+
+    Field yang tidak ada di CSV dibiarkan kosong/nol.
+    Angka boleh pakai separator ribuan titik ("6.400.000" → 6400000).
+    """
+    rows: dict = {}
+    with open(csv_path, encoding="utf-8", newline="") as f:
+        for row in _csv.DictReader(f):
+            fname = row.get("field", "").strip()
+            fval  = row.get("value", "").strip()
+            if fname in _GT_FIELDS and fval:
+                rows[fname] = fval
+
+    def get_int(key: str) -> int:
+        raw = rows.get(key, "0")
+        return int(re.sub(r"[.,]", "", raw)) if raw else 0
+
+    return InvoiceData(
+        nomor_faktur   = rows.get("nomor_faktur",   ""),
+        tanggal        = rows.get("tanggal",         ""),
+        jatuh_tempo    = rows.get("jatuh_tempo",     ""),
+        nama_penjual   = rows.get("nama_penjual",    ""),
+        npwp_penjual   = rows.get("npwp_penjual",    ""),
+        alamat_penjual = rows.get("alamat_penjual",  ""),
+        nama_pembeli   = rows.get("nama_pembeli",    ""),
+        npwp_pembeli   = rows.get("npwp_pembeli",    ""),
+        alamat_pembeli = rows.get("alamat_pembeli",  ""),
+        subtotal       = get_int("subtotal"),
+        ppn            = get_int("ppn"),
+        total          = get_int("total"),
+        items          = [],
+        terbilang      = "",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Scoring tanpa ground truth
 # ---------------------------------------------------------------------------
 
 def _compute_score(ocr: OcrResult, parsed: ParsedInvoice) -> UploadQualityScore:
