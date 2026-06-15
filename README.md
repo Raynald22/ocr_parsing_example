@@ -1,7 +1,12 @@
-# OCR + Parsing — Faktur Pajak Indonesia
+# OCR + Parsing — Dokumen Invoice
 
 Contoh pembelajaran OCR dan parsing dokumen dengan Python.
-Pipeline: **buat gambar faktur** → **preprocessing** → **OCR** → **parse ke JSON** → **hitung akurasi**.
+Ada dua pipeline yang berjalan terpisah:
+
+| Pipeline | Tab | Teknologi | Tujuan |
+|----------|-----|-----------|--------|
+| **Utama** | 1–4 | Tesseract + Pillow | Belajar OCR step-by-step |
+| **Upload** | 5 | Docling + Qwen AI | Baca dokumen nyata secara akurat |
 
 Target akurasi: ≥ 95% character accuracy.
 
@@ -9,43 +14,34 @@ Target akurasi: ≥ 95% character accuracy.
 
 ## Cara Install
 
-### 1. Install Python packages
+### 1. Python packages
 
 ```bash
 pip install -r requirements.txt
 ```
 
-Package yang diinstall: `Pillow`, `pytesseract`, `opencv-python`, `numpy`
+Package utama:
+- `Pillow`, `pytesseract`, `opencv-python`, `numpy` — pipeline utama (Tesseract)
+- `docling` — baca PDF, DOCX, gambar (download model AI ~500 MB saat pertama kali dijalankan)
 
-### 2. Install Tesseract OCR (wajib, terpisah dari pip)
+### 2. Tesseract OCR
 
-Tesseract adalah engine OCR-nya. Install sesuai sistem operasi:
+Wajib untuk pipeline utama (tab 1–4). Install sesuai OS:
 
 #### Windows
 
-1. Download installer dari:
-   **https://github.com/UB-Mannheim/tesseract/wiki**
-   Klik `tesseract-ocr-w64-setup-*.exe` (versi 64-bit)
-
-2. Jalankan installer. Saat muncul halaman "Choose Components", centang:
-   - `Additional language data` → cari dan centang **Indonesian**
-
-3. Selesai install, Tesseract akan ada di:
-   `C:\Program Files\Tesseract-OCR\tesseract.exe`
+1. Download dari **github.com/UB-Mannheim/tesseract/wiki** — pilih `tesseract-ocr-w64-setup-*.exe`
+2. Saat install, centang **Additional language data → Indonesian**
+3. Tesseract akan ada di `C:\Program Files\Tesseract-OCR\tesseract.exe`
 
 > Jika lupa install bahasa Indonesia: download `ind.traineddata` dari
-> https://github.com/tesseract-ocr/tessdata/blob/main/ind.traineddata
-> lalu copy ke `C:\Program Files\Tesseract-OCR\tessdata\`
+> github.com/tesseract-ocr/tessdata lalu copy ke `C:\Program Files\Tesseract-OCR\tessdata\`
 
 #### macOS
-
-Install via Homebrew (termasuk semua bahasa, termasuk Indonesia):
 
 ```bash
 brew install tesseract tesseract-lang
 ```
-
-Tesseract langsung tersedia di PATH setelah install — tidak perlu konfigurasi tambahan.
 
 #### Linux (Debian / Ubuntu)
 
@@ -53,27 +49,54 @@ Tesseract langsung tersedia di PATH setelah install — tidak perlu konfigurasi 
 sudo apt install tesseract-ocr tesseract-ocr-ind
 ```
 
-`tesseract-ocr-ind` adalah paket bahasa Indonesia untuk Tesseract.
+### 3. Ollama + Qwen (untuk tab Upload)
+
+Ollama menjalankan model AI secara lokal — dipakai untuk parsing dokumen ke JSON.
+
+1. Download dan install Ollama dari **ollama.com**
+2. Buka terminal baru, lalu download model Qwen (~4–5 GB):
+   ```bash
+   ollama pull qwen2.5
+   ```
+3. Ollama otomatis berjalan di background di `http://localhost:11434`
+
+> Jika Ollama tidak berjalan saat upload, sistem otomatis fallback ke parsing regex biasa.
 
 ---
 
 ## Cara Jalankan
 
+### Pipeline utama (terminal)
+
 ```bash
 python main.py
 ```
 
-Atau dengan seed berbeda (untuk data faktur yang berbeda):
+Atau dengan seed berbeda (data faktur berbeda):
 
 ```bash
 python main.py --seed 7
 ```
 
+### UI (React + Flask)
+
+**Terminal 1 — Python API:**
+```bash
+python api.py
+# Berjalan di http://localhost:5000
+```
+
+**Terminal 2 — React dev server:**
+```bash
+cd ui
+npm install
+npm run dev
+# Buka http://localhost:5173
+```
+
 ---
 
-## Yang Terjadi Saat Dijalankan
-
-Program menjalankan 5 langkah secara berurutan dan menampilkan hasilnya:
+## Yang Terjadi Saat Dijalankan (Pipeline Utama)
 
 ```
 Langkah 1: GENERATE FAKTUR SINTETIK
@@ -101,62 +124,57 @@ Langkah 5: SCORING
 
 ---
 
+## Tab UI
+
+| Tab | Isi |
+|-----|-----|
+| **Invoice** | Gambar faktur + data ground truth terstruktur |
+| **Preprocessing** | 6 langkah preprocessing dengan gambar + penjelasan |
+| **OCR** | Teks OCR sebelum vs sesudah preprocessing |
+| **Akurasi** | Skor CER, progress bar, tabel per-field (EXACT / ~X% / MISS) |
+| **Upload Dokumen** | Upload file nyata → Docling + Qwen → konten terstruktur |
+
+---
+
+## Tab Upload Dokumen
+
+Upload file invoice atau dokumen apapun. Pipeline:
+
+```
+File (PDF / DOCX / gambar)
+         ↓
+      Docling          ← baca layout, tabel, teks (OCR internal jika gambar)
+         ↓
+   teks markdown
+         ↓
+    Qwen (Ollama)      ← parse teks → JSON key-value secara cerdas
+         ↓               (fallback ke regex jika Ollama tidak jalan)
+   Hasil di UI         ← konten dinamis + tabel + skor confidence
+```
+
+**Format yang didukung:** PDF, DOCX, PNG, JPG, JPEG, BMP, TIFF, WEBP — maks 20 MB
+
+**Skor kualitas** ditampilkan berdasarkan Docling confidence (target ≥ 95%).
+Badge **Qwen AI** muncul di UI jika Ollama berhasil digunakan.
+
+**Opsional — CSV ground truth:**
+Upload CSV berisi nilai field yang diketahui → sistem hitung CER aktual per-field
+seperti di tab Akurasi. Download template CSV dari tombol di UI.
+
+---
+
 ## Output Files
 
-Setelah dijalankan, folder `output/` berisi:
+Setelah menjalankan pipeline utama, folder `output/` berisi:
 
 | File | Isi |
 |------|-----|
 | `invoice_original.png` | Gambar faktur yang dibuat |
 | `step_01_upscale.png` — `step_06_sharpen.png` | Gambar setiap langkah preprocessing |
 | `ocr_raw.txt` | Teks OCR tanpa preprocessing |
-| `ocr_preprocessed.txt` | Teks OCR dengan preprocessing (lebih akurat) |
-| `ground_truth.json` | Nilai field yang sebenarnya (untuk scoring) |
+| `ocr_preprocessed.txt` | Teks OCR dengan preprocessing |
+| `ground_truth.json` | Nilai field yang sebenarnya |
 | `results.json` | Skor akurasi detail per field |
-
----
-
-## Cara Menjalankan UI (React)
-
-Selain output terminal, ada web UI untuk melihat hasil secara visual.
-
-**Terminal 1 — Python API server:**
-```bash
-pip install flask flask-cors
-python api.py
-# Berjalan di http://localhost:5000
-```
-
-**Terminal 2 — React dev server:**
-```bash
-cd ui
-npm install
-npm run dev
-# Buka http://localhost:5173
-```
-
-UI memiliki 5 tab:
-| Tab | Isi |
-|-----|-----|
-| **Invoice** | Gambar faktur + data terstruktur ground truth |
-| **Preprocessing** | 6 langkah preprocessing dengan gambar + penjelasan |
-| **OCR** | Teks OCR sebelum vs sesudah preprocessing |
-| **Akurasi** | Skor akurasi, progress bar, tabel per-field (EXACT/CLOSE/MISS) |
-| **Upload Dokumen** | Upload gambar invoice sendiri → OCR + parse + skor kualitas |
-
-### Upload Dokumen (tab ke-5)
-
-Drag & drop atau pilih file gambar invoice kamu sendiri (PNG, JPG, JPEG, BMP, TIFF, WEBP, maks 20 MB).
-Pipeline akan:
-1. Preprocessing gambar (6 langkah)
-2. OCR dengan Tesseract
-3. Parse field-field invoice
-4. Hitung **skor kualitas** (target ≥ 95%):
-   - OCR Confidence (50%) — seberapa yakin Tesseract
-   - Field Completeness (35%) — berapa field yang berhasil diparse
-   - Math Consistency (15%) — apakah subtotal + PPN = Total?
-
-Dari UI bisa juga langsung klik **"Jalankan Pipeline"** untuk membuat data baru dengan seed berbeda.
 
 ---
 
@@ -164,26 +182,81 @@ Dari UI bisa juga langsung klik **"Jalankan Pipeline"** untuk membuat data baru 
 
 ```
 ocr_parse_example/
-├── main.py                    # Entry point — jalankan ini
+├── main.py                      # Entry point pipeline utama
+├── api.py                       # Flask API server untuk UI
 ├── requirements.txt
 └── src/
-    ├── invoice_generator.py   # Buat gambar faktur sintetik + data ground truth
-    ├── preprocessor.py        # Pipeline 6-langkah preprocessing gambar
-    ├── ocr.py                 # Wrapper pytesseract
-    ├── parser.py              # Regex parser: teks OCR -> data terstruktur
-    └── scorer.py              # Hitung CER dan field accuracy
+    ├── invoice_generator.py     # Buat gambar faktur sintetik + ground truth
+    ├── preprocessor.py          # Pipeline 6-langkah preprocessing gambar
+    ├── ocr.py                   # Wrapper pytesseract (Windows/macOS/Linux)
+    ├── parser.py                # Regex parser: teks OCR → data terstruktur
+    ├── scorer.py                # Hitung CER dan field accuracy
+    └── upload_processor.py      # Pipeline upload: Docling + Qwen AI parsing
 ```
+
+### Perbedaan dua pipeline
+
+**Pipeline utama** (tab 1–4) — untuk belajar cara kerja OCR:
+- Gambar sintetik → Pillow preprocessing → Tesseract OCR → regex parser → CER score
+- Setiap langkah bisa dilihat hasilnya di UI
+- Ada ground truth → skor akurasi bisa dihitung dengan tepat
+
+**Pipeline upload** (tab 5) — untuk dokumen nyata:
+- Docling menangani layout analysis, tabel, dan OCR secara internal
+- Qwen AI (via Ollama) parsing teks → JSON secara cerdas, tanpa schema tetap
+- Konten apapun dalam dokumen diekstrak secara dinamis (bukan hanya field invoice)
 
 ---
 
 ## Penjelasan Konsep
 
 **Kenapa preprocessing?**
-Tesseract bekerja optimal pada gambar resolusi tinggi (300+ DPI) dengan teks hitam-putih bersih. Gambar yang langsung di-OCR tanpa preprocessing biasanya 10–20% lebih rendah akurasinya.
+Tesseract bekerja optimal pada gambar resolusi tinggi (300+ DPI) dengan teks hitam-putih bersih.
+Gambar tanpa preprocessing biasanya 10–20% lebih rendah akurasinya.
 
-**Kenapa regex untuk parsing, bukan ML?**
-Dokumen terstruktur seperti faktur punya format yang konsisten. Regex lebih mudah dipahami, di-debug, dan dimodifikasi dibanding model ML untuk kasus ini.
+**Kenapa regex untuk parsing (pipeline utama)?**
+Dokumen terstruktur seperti faktur punya format yang konsisten.
+Regex lebih mudah dipahami dan di-debug dibanding ML untuk kasus pembelajaran ini.
+
+**Kenapa Qwen untuk parsing (pipeline upload)?**
+Regex tidak bisa menangani dokumen yang formatnya bervariasi, nilai multi-baris,
+atau field yang tidak mengikuti pola tertentu. Qwen memahami konteks dokumen
+dan mengekstrak informasi secara natural, seperti manusia membaca dokumen.
 
 **Apa itu CER?**
-Character Error Rate = jumlah karakter yang salah / total karakter referensi.
-CER 0.03 berarti 3% karakter salah → akurasi 97%.
+Character Error Rate = jumlah karakter salah / total karakter referensi.
+CER 0.03 = 3% karakter salah → akurasi 97%.
+
+**Kenapa Docling?**
+Docling (IBM Research) menangani PDF, DOCX, dan gambar dalam satu pipeline —
+termasuk layout analysis dan OCR internal menggunakan EasyOCR.
+Tidak perlu install Tesseract untuk pipeline upload.
+
+---
+
+## Konfigurasi Opsional
+
+### Ganti model Qwen
+
+Default menggunakan `qwen2.5`. Bisa diganti via environment variable:
+
+```bash
+# Windows PowerShell
+$env:QWEN_MODEL = "qwen2.5:14b"
+python api.py
+```
+
+```bash
+# macOS / Linux
+QWEN_MODEL=qwen2.5:14b python api.py
+```
+
+Model yang tersedia di Ollama: `qwen2.5:3b` (ringan), `qwen2.5:7b` (default), `qwen2.5:14b` (lebih akurat).
+
+### Ganti URL Ollama
+
+Jika Ollama berjalan di port atau host berbeda:
+
+```bash
+QWEN_BASE_URL=http://localhost:11434 python api.py
+```

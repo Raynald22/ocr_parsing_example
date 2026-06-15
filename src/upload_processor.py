@@ -34,7 +34,8 @@ RESULT_FILE   = OUTPUT_DIR / "upload_result.json"
 TOTAL_FIELDS  = 11   # nomor_faktur, tanggal, jatuh_tempo, nama_penjual, npwp_penjual,
                      # nama_pembeli, npwp_pembeli, alamat_pembeli, subtotal, ppn, total
 
-SUPPORTED = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+SUPPORTED        = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+SUPPORTED_CSV    = {'.csv'}
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +68,28 @@ class UploadResult:
     score:          UploadQualityScore
     elapsed_s:      float
     cer_score:      Optional[dict] = None  # score_to_dict(InvoiceScore) jika CSV diberikan
+
+
+@dataclass
+class DoclingResult:
+    """
+    Hasil pemrosesan dokumen dengan Docling.
+
+    Menggunakan pendekatan fleksibel — tidak memaksa dokumen ke dalam schema tetap.
+    Isi dokumen diekstrak apa adanya: teks markdown, tabel, dan pasangan kunci:nilai.
+    """
+    filename:       str
+    file_url:       Optional[str]   # path output/ hanya untuk file gambar (None untuk PDF/DOCX)
+    extracted_text: str             # teks hasil Docling (format Markdown)
+    tables:         list            # tabel yang ditemukan: list[list[list[str]]]
+    key_values:     dict            # pasangan kunci:nilai yang ditemukan
+    doc_confidence: float           # Docling mean_grade × 100 (0–100)
+    tables_found:   int
+    kv_found:       int
+    passes:         bool            # doc_confidence >= 95
+    ai_extraction:  bool            # True jika key_values berasal dari Claude AI
+    elapsed_s:      float
+    cer_score:      Optional[dict] = None
 
 
 # ---------------------------------------------------------------------------
@@ -262,8 +285,283 @@ def parse_ground_truth_csv(csv_path: str) -> InvoiceData:
     )
 
 
+@dataclass
+class CsvParseResult:
+    """Hasil parsing CSV faktur tanpa OCR."""
+    filename:     str
+    fields:       dict          # semua 11 field, None jika tidak ada di CSV
+    fields_found: int
+    fields_total: int           # selalu 11
+    math_ok:      Optional[bool]  # apakah subtotal + ppn = total?
+
+
+def process_csv_only(csv_path: str) -> CsvParseResult:
+    """
+    Parse file CSV faktur dan validasi isinya, tanpa OCR.
+
+    Cocok untuk kasus di mana data invoice sudah tersedia dalam bentuk teks
+    (dari sistem akuntansi, export ERP, dll) dan tidak perlu proses gambar.
+
+    Args:
+        csv_path: Path ke file CSV dengan format field,value
+
+    Returns:
+        CsvParseResult dengan field-field yang berhasil diparsing
+    """
+    path = Path(csv_path)
+    gt   = parse_ground_truth_csv(csv_path)
+
+    fields = {
+        "nomor_faktur":   gt.nomor_faktur   or None,
+        "tanggal":        gt.tanggal        or None,
+        "jatuh_tempo":    gt.jatuh_tempo    or None,
+        "nama_penjual":   gt.nama_penjual   or None,
+        "npwp_penjual":   gt.npwp_penjual   or None,
+        "nama_pembeli":   gt.nama_pembeli   or None,
+        "npwp_pembeli":   gt.npwp_pembeli   or None,
+        "alamat_pembeli": gt.alamat_pembeli or None,
+        "subtotal":       gt.subtotal       or None,
+        "ppn":            gt.ppn            or None,
+        "total":          gt.total          or None,
+    }
+
+    found = sum(1 for v in fields.values() if v is not None)
+
+    math_ok = None
+    if gt.subtotal and gt.ppn and gt.total:
+        math_ok = abs(gt.total - (gt.subtotal + gt.ppn)) <= max(1, gt.total * 0.01)
+
+    return CsvParseResult(
+        filename=path.name,
+        fields=fields,
+        fields_found=found,
+        fields_total=TOTAL_FIELDS,
+        math_ok=math_ok,
+    )
+
+
 # ---------------------------------------------------------------------------
-# Scoring tanpa ground truth
+# Docling pipeline (untuk tab Upload Dokumen)
+# ---------------------------------------------------------------------------
+
+SUPPORTED_DOCLING = {
+    '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp',  # gambar
+    '.pdf', '.docx',                                              # dokumen
+}
+
+_IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+
+
+def process_with_docling(
+    file_path: str,
+    csv_path:  Optional[str] = None,
+) -> DoclingResult:
+    """
+    Proses dokumen (PDF, DOCX, gambar) menggunakan Docling.
+
+    Berbeda dengan process_uploaded() yang memakai Tesseract + Pillow preprocessing:
+    - Docling menangani layout analysis, OCR (via EasyOCR), dan tabel secara internal
+    - Tidak ada langkah preprocessing manual yang perlu dilakukan
+    - Mendukung PDF, DOCX, dan format gambar
+
+    Args:
+        file_path: Path ke dokumen (PDF, DOCX, gambar)
+        csv_path:  CSV ground truth opsional → skor CER
+
+    Returns:
+        DoclingResult dengan teks terekstrak, parsed fields, dan skor kualitas
+    """
+    try:
+        from docling.document_converter import DocumentConverter
+    except ImportError:
+        raise ImportError(
+            "Jalankan: pip install docling\n"
+            "Pertama kali install akan download model AI (~500MB)."
+        )
+
+    start = time.time()
+    path  = Path(file_path)
+
+    if path.suffix.lower() not in SUPPORTED_DOCLING:
+        raise ValueError(
+            f"Format '{path.suffix}' tidak didukung. "
+            f"Gunakan: {', '.join(sorted(SUPPORTED_DOCLING))}"
+        )
+
+    OUTPUT_DIR.mkdir(exist_ok=True)
+
+    # 1. Konversi dokumen dengan Docling
+    converter  = DocumentConverter()
+    doc_result = converter.convert(str(path))
+    text       = doc_result.document.export_to_markdown()
+
+    # 2. Confidence — Docling mean_grade (0–1); DOCX digital default 1.0
+    try:
+        conf_01 = float(doc_result.document.confidence_scores.mean_grade)
+    except Exception:
+        conf_01 = 1.0
+
+    # 3. Untuk file gambar → simpan ke output/ agar ditampilkan di UI
+    file_url = None
+    if path.suffix.lower() in _IMAGE_EXTS:
+        from PIL import Image as _Image
+        dest = OUTPUT_DIR / "uploaded_original.png"
+        _Image.open(path).convert("RGB").save(dest)
+        file_url = "uploaded_original.png"
+
+    # 4. Ekstrak tabel dari struktur Docling (dinamis, tidak fixed schema)
+    tables = _extract_tables_docling(doc_result.document)
+
+    # 5. Ekstrak pasangan kunci:nilai — coba Qwen dulu, fallback ke regex
+    ai_kv       = _extract_kv_with_qwen(text)
+    ai_used     = bool(ai_kv)
+    key_values  = ai_kv if ai_used else _extract_kv_flexible(text)
+
+    # 6. CER scoring opsional — gunakan regex parser hanya untuk perbandingan, bukan tampilan
+    cer_score = None
+    if csv_path:
+        from src.scorer import score_invoice, score_to_dict
+        parsed    = parse_invoice(text)
+        gt        = parse_ground_truth_csv(csv_path)
+        cer_score = score_to_dict(score_invoice(gt, parsed))
+
+    elapsed = round(time.time() - start, 2)
+
+    result = DoclingResult(
+        filename=path.name,
+        file_url=file_url,
+        extracted_text=text,
+        tables=tables,
+        key_values=key_values,
+        doc_confidence=round(conf_01 * 100, 1),
+        tables_found=len(tables),
+        kv_found=len(key_values),
+        passes=conf_01 * 100 >= 95.0,
+        ai_extraction=ai_used,
+        elapsed_s=elapsed,
+        cer_score=cer_score,
+    )
+
+    RESULT_FILE.write_text(
+        json.dumps(asdict(result), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    return result
+
+
+def _extract_tables_docling(document) -> list:
+    """Ekstrak semua tabel dari dokumen Docling sebagai list 2D string."""
+    tables = []
+    try:
+        for table in document.tables:
+            grid = []
+            for row in table.data.grid:
+                grid.append([cell.text for cell in row])
+            if grid:
+                tables.append(grid)
+    except Exception:
+        pass
+    return tables
+
+
+def _extract_kv_flexible(text: str) -> dict:
+    """
+    Ekstrak pasangan kunci:nilai dari teks dokumen secara dinamis.
+
+    Mencari baris dengan format "Kunci: Nilai" — tidak tergantung pada
+    schema tetap seperti nomor_faktur, tanggal, dll.
+    Digunakan sebagai fallback jika AI extraction tidak tersedia.
+    """
+    kv = {}
+    for line in text.splitlines():
+        line = line.strip().lstrip('#*-> ').strip()
+        if ':' not in line or len(line) > 300:
+            continue
+        key, _, val = line.partition(':')
+        key = key.strip()
+        val = val.strip()
+        if key and val and 3 <= len(key) <= 80 and len(val) <= 200:
+            if key not in kv:
+                kv[key] = val
+    return kv
+
+
+def _extract_kv_with_qwen(text: str) -> dict:
+    """
+    Ekstrak semua informasi dokumen menggunakan Qwen via Ollama.
+
+    Mengirim teks hasil Docling ke Qwen untuk diparsing secara cerdas —
+    lebih akurat dari regex karena memahami konteks, nilai multi-baris,
+    dan field yang tidak mengikuti format "kunci: nilai" secara ketat.
+
+    Konfigurasi via environment variable (opsional):
+        QWEN_BASE_URL  — default: http://localhost:11434
+        QWEN_MODEL     — default: qwen2.5
+
+    Setup: install Ollama (https://ollama.com) lalu jalankan:
+        ollama pull qwen2.5
+
+    Jika Ollama tidak berjalan / gagal, kembalikan dict kosong (fallback ke regex).
+    """
+    import json
+    import os
+
+    import requests
+
+    base_url = os.getenv("QWEN_BASE_URL", "http://localhost:11434")
+    model    = os.getenv("QWEN_MODEL",    "qwen2.5")
+
+    prompt = (
+        "Ekstrak semua informasi dari dokumen berikut sebagai JSON object "
+        "dengan pasangan kunci:nilai.\n\n"
+        "Aturan:\n"
+        "- Gunakan nama kunci persis seperti yang ada di dokumen\n"
+        "- Untuk nilai yang kosong/blank, jangan include\n"
+        "- Untuk daftar item (misal daftar lampiran), gunakan array string\n"
+        "- Abaikan teks instruksi atau catatan cara pengisian form\n"
+        "- Kembalikan HANYA JSON valid, tanpa penjelasan\n\n"
+        f"Dokumen:\n{text}"
+    )
+
+    try:
+        resp = requests.post(
+            f"{base_url}/api/chat",
+            json={
+                "model":    model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream":   False,
+            },
+            timeout=120,
+        )
+        resp.raise_for_status()
+        response = resp.json()["message"]["content"].strip()
+
+        # Hapus markdown code fence jika ada
+        if response.startswith("```"):
+            parts = response.split("```")
+            response = parts[1] if len(parts) > 1 else parts[0]
+            if response.startswith("json"):
+                response = response[4:]
+            response = response.strip()
+
+        result = json.loads(response)
+
+        # Flatten: ubah nilai list jadi string gabungan agar mudah ditampilkan
+        flat = {}
+        for k, v in result.items():
+            if isinstance(v, list):
+                flat[k] = ", ".join(str(i) for i in v)
+            elif v is not None and str(v).strip():
+                flat[k] = str(v).strip()
+        return flat
+
+    except Exception:
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Scoring tanpa ground truth (Tesseract, untuk main pipeline)
 # ---------------------------------------------------------------------------
 
 def _compute_score(ocr: OcrResult, parsed: ParsedInvoice) -> UploadQualityScore:

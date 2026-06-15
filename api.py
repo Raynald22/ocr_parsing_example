@@ -146,32 +146,23 @@ def upload():
         request.files["csv"].save(csv_temp)
 
     try:
-        # Import di sini agar tidak crash saat Tesseract belum terinstall
-        # (endpoint lain tetap bisa diakses)
-        import sys as _sys
-        _sys.path.insert(0, str(Path(__file__).parent))
-        from src.upload_processor import process_uploaded
+        from src.upload_processor import process_with_docling, SUPPORTED_DOCLING
 
-        result = process_uploaded(
+        if suffix not in SUPPORTED_DOCLING:
+            return jsonify({"error": f"Format '{suffix}' tidak didukung."}), 400
+
+        result = process_with_docling(
             str(temp_path),
             csv_path=str(csv_temp) if csv_temp else None,
         )
         return jsonify(dataclasses.asdict(result))
 
+    except ImportError as e:
+        return jsonify({"error": str(e)}), 503
     except ValueError as e:
         return jsonify({"error": str(e)}), 400
     except Exception as e:
-        msg = str(e)
-        # Deteksi Tesseract tidak terinstall
-        if "tesseract" in msg.lower() and ("not installed" in msg.lower() or "path" in msg.lower()):
-            return jsonify({
-                "error": (
-                    "Tesseract OCR belum terinstall. "
-                    "Download dari: https://github.com/UB-Mannheim/tesseract/wiki "
-                    "dan install, lalu restart python api.py."
-                )
-            }), 503
-        return jsonify({"error": f"Gagal memproses: {msg}"}), 500
+        return jsonify({"error": f"Gagal memproses: {e}"}), 500
     finally:
         if temp_path.exists():
             temp_path.unlink()
@@ -184,6 +175,36 @@ def upload_result():
     if not UPLOAD_RESULT.exists():
         return jsonify({"error": "Belum ada upload. Upload file terlebih dahulu."}), 404
     return send_file(UPLOAD_RESULT, mimetype="application/json")
+
+
+@app.post("/api/parse-csv")
+def parse_csv():
+    """
+    Parse file CSV faktur tanpa OCR.
+    Request: multipart dengan field 'file' berisi CSV.
+    """
+    if "file" not in request.files:
+        return jsonify({"error": "Tidak ada file dalam request."}), 400
+
+    file = request.files["file"]
+    if not file.filename:
+        return jsonify({"error": "Nama file kosong."}), 400
+    if not file.filename.lower().endswith(".csv"):
+        return jsonify({"error": "Hanya file .csv yang didukung di endpoint ini."}), 400
+
+    csv_temp = OUTPUT / "parse_csv_temp.csv"
+    OUTPUT.mkdir(exist_ok=True)
+    file.save(csv_temp)
+
+    try:
+        from src.upload_processor import process_csv_only
+        result = process_csv_only(str(csv_temp))
+        return jsonify(dataclasses.asdict(result))
+    except Exception as e:
+        return jsonify({"error": f"Gagal memproses CSV: {e}"}), 500
+    finally:
+        if csv_temp.exists():
+            csv_temp.unlink()
 
 
 @app.get("/api/csv-template")
