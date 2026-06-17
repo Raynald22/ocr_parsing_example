@@ -34,3 +34,8 @@ docling>=2.0.0
 # AI extraction (Qwen via Ollama, untuk parsing konten dokumen ke JSON)
 # Install Ollama: https://ollama.com → lalu: ollama pull qwen2.5
 # requests sudah terinstall otomatis sebagai dependency Docling
+
+# API server
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+python-multipart>=0.0.17

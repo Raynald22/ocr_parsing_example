@@ -73,22 +73,25 @@ class UploadResult:
 @dataclass
 class DoclingResult:
     """
-    Hasil pemrosesan dokumen dengan Docling.
+    Hasil pemrosesan dokumen dengan Docling + Qwen AI.
 
     Menggunakan pendekatan fleksibel — tidak memaksa dokumen ke dalam schema tetap.
     Isi dokumen diekstrak apa adanya: teks markdown, tabel, dan pasangan kunci:nilai.
     """
     filename:       str
-    file_url:       Optional[str]   # path output/ hanya untuk file gambar (None untuk PDF/DOCX)
-    extracted_text: str             # teks hasil Docling (format Markdown)
-    tables:         list            # tabel yang ditemukan: list[list[list[str]]]
-    key_values:     dict            # pasangan kunci:nilai yang ditemukan
+    extracted_text: str             # teks hasil OCR/Docling
+    cleaned_text:   str             # teks setelah cleaning
+    tables:         list            # tabel dari Docling (list[list[list[str]]])
+    key_values:     dict            # key_values flat (dari AI atau regex fallback)
+    ai_result:      Optional[dict]  # full structured result dari Qwen (None jika fallback)
     doc_confidence: float           # Docling mean_grade × 100 (0–100)
     tables_found:   int
     kv_found:       int
     passes:         bool            # doc_confidence >= 95
-    ai_extraction:  bool            # True jika key_values berasal dari Claude AI
+    ai_extraction:  bool            # True jika ai_result terisi dari Qwen
+    pipeline_steps: list            # [{step, status, detail, elapsed_s}]
     elapsed_s:      float
+    image_url:      Optional[str] = None   # nama file di output/ (hanya untuk upload gambar)
     cer_score:      Optional[dict] = None
 
 
@@ -345,11 +348,13 @@ def process_csv_only(csv_path: str) -> CsvParseResult:
 # ---------------------------------------------------------------------------
 
 SUPPORTED_DOCLING = {
-    '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp',  # gambar
-    '.pdf', '.docx',                                              # dokumen
+    '.pdf',
+    '.docx', '.doc',
+    '.xlsx', '.xls',
+    '.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp',
 }
 
-_IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+IMAGE_EXTS = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
 
 
 def process_with_docling(
@@ -357,19 +362,14 @@ def process_with_docling(
     csv_path:  Optional[str] = None,
 ) -> DoclingResult:
     """
-    Proses dokumen (PDF, DOCX, gambar) menggunakan Docling.
-
-    Berbeda dengan process_uploaded() yang memakai Tesseract + Pillow preprocessing:
-    - Docling menangani layout analysis, OCR (via EasyOCR), dan tabel secara internal
-    - Tidak ada langkah preprocessing manual yang perlu dilakukan
-    - Mendukung PDF, DOCX, dan format gambar
+    Pipeline dokumen: OCR → Clean Text → Qwen → Validate JSON.
 
     Args:
-        file_path: Path ke dokumen (PDF, DOCX, gambar)
+        file_path: Path ke dokumen (PDF, DOCX, Excel)
         csv_path:  CSV ground truth opsional → skor CER
 
     Returns:
-        DoclingResult dengan teks terekstrak, parsed fields, dan skor kualitas
+        DoclingResult dengan hasil tiap step pipeline
     """
     try:
         from docling.document_converter import DocumentConverter
@@ -381,6 +381,7 @@ def process_with_docling(
 
     start = time.time()
     path  = Path(file_path)
+    steps = []
 
     if path.suffix.lower() not in SUPPORTED_DOCLING:
         raise ValueError(
@@ -390,38 +391,92 @@ def process_with_docling(
 
     OUTPUT_DIR.mkdir(exist_ok=True)
 
-    # 1. Konversi dokumen dengan Docling
+    # ── Step 1: OCR ────────────────────────────────────────────────────────
+    t0 = time.time()
     converter  = DocumentConverter()
     doc_result = converter.convert(str(path))
-    text       = doc_result.document.export_to_markdown()
+    raw_text   = doc_result.document.export_to_markdown()
 
-    # 2. Confidence — Docling mean_grade (0–1); DOCX digital default 1.0
     try:
         conf_01 = float(doc_result.document.confidence_scores.mean_grade)
     except Exception:
         conf_01 = 1.0
 
-    # 3. Untuk file gambar → simpan ke output/ agar ditampilkan di UI
-    file_url = None
-    if path.suffix.lower() in _IMAGE_EXTS:
-        from PIL import Image as _Image
-        dest = OUTPUT_DIR / "uploaded_original.png"
-        _Image.open(path).convert("RGB").save(dest)
-        file_url = "uploaded_original.png"
-
-    # 4. Ekstrak tabel dari struktur Docling (dinamis, tidak fixed schema)
     tables = _extract_tables_docling(doc_result.document)
+    steps.append({
+        "step":      "OCR",
+        "status":    "ok",
+        "detail":    f"{len(raw_text)} karakter diekstrak, confidence {round(conf_01*100,1)}%",
+        "elapsed_s": round(time.time() - t0, 2),
+    })
 
-    # 5. Ekstrak pasangan kunci:nilai — coba Qwen dulu, fallback ke regex
-    ai_kv       = _extract_kv_with_qwen(text)
-    ai_used     = bool(ai_kv)
-    key_values  = ai_kv if ai_used else _extract_kv_flexible(text)
+    # Simpan preview gambar jika input adalah file gambar
+    image_url = None
+    if path.suffix.lower() in IMAGE_EXTS:
+        try:
+            from PIL import Image as _PILImage
+            preview_path = OUTPUT_DIR / "upload_preview.png"
+            _PILImage.open(path).convert("RGB").save(preview_path)
+            image_url = "upload_preview.png"
+        except Exception:
+            pass
 
-    # 6. CER scoring opsional — gunakan regex parser hanya untuk perbandingan, bukan tampilan
+    # ── Step 2: Clean Text ─────────────────────────────────────────────────
+    t0 = time.time()
+    cleaned = _clean_text(raw_text)
+    steps.append({
+        "step":      "Clean Text",
+        "status":    "ok",
+        "detail":    f"{len(raw_text)} → {len(cleaned)} karakter",
+        "elapsed_s": round(time.time() - t0, 2),
+    })
+
+    # ── Step 3: Qwen ───────────────────────────────────────────────────────
+    t0 = time.time()
+    raw_ai = _extract_kv_with_qwen(cleaned)
+    if raw_ai:
+        steps.append({
+            "step":      "Qwen",
+            "status":    "ok",
+            "detail":    f"JSON diterima ({len(str(raw_ai))} chars)",
+            "elapsed_s": round(time.time() - t0, 2),
+        })
+    else:
+        steps.append({
+            "step":      "Qwen",
+            "status":    "fallback",
+            "detail":    "Ollama tidak aktif — menggunakan regex",
+            "elapsed_s": round(time.time() - t0, 2),
+        })
+
+    # ── Step 4: Validate JSON ──────────────────────────────────────────────
+    t0 = time.time()
+    if raw_ai:
+        # Qwen returns flat {field: value} — use directly as key_values
+        key_values = {k: v for k, v in raw_ai.items() if v not in (None, "", [], {})}
+        ai_result  = {"key_values": key_values}
+        ai_used    = True
+        val_status = "ok"
+        val_detail = f"{len(key_values)} field diekstrak"
+    else:
+        ai_result  = None
+        key_values = _extract_kv_flexible(cleaned)
+        ai_used    = False
+        val_status = "skip"
+        val_detail = "tidak ada AI result — menggunakan regex"
+
+    steps.append({
+        "step":      "Validate JSON",
+        "status":    val_status,
+        "detail":    val_detail,
+        "elapsed_s": round(time.time() - t0, 2),
+    })
+
+    # ── CER scoring (opsional) ─────────────────────────────────────────────
     cer_score = None
     if csv_path:
         from src.scorer import score_invoice, score_to_dict
-        parsed    = parse_invoice(text)
+        parsed    = parse_invoice(cleaned)
         gt        = parse_ground_truth_csv(csv_path)
         cer_score = score_to_dict(score_invoice(gt, parsed))
 
@@ -429,16 +484,19 @@ def process_with_docling(
 
     result = DoclingResult(
         filename=path.name,
-        file_url=file_url,
-        extracted_text=text,
+        extracted_text=raw_text,
+        cleaned_text=cleaned,
         tables=tables,
         key_values=key_values,
+        ai_result=ai_result,
         doc_confidence=round(conf_01 * 100, 1),
         tables_found=len(tables),
         kv_found=len(key_values),
         passes=conf_01 * 100 >= 95.0,
         ai_extraction=ai_used,
+        pipeline_steps=steps,
         elapsed_s=elapsed,
+        image_url=image_url,
         cer_score=cer_score,
     )
 
@@ -487,6 +545,34 @@ def _extract_kv_flexible(text: str) -> dict:
     return kv
 
 
+def _clean_text(text: str) -> str:
+    """
+    Bersihkan teks hasil OCR sebelum dikirim ke Qwen.
+
+    - Hapus baris kosong berlebihan (> 2 baris berturut-turut)
+    - Hapus karakter kontrol non-printable
+    - Normalisasi spasi horizontal
+    - Hapus baris yang hanya berisi pemisah (---, ===, dll)
+    """
+    import re
+    # Hapus karakter kontrol (kecuali newline dan tab)
+    text = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', text)
+    # Normalisasi spasi horizontal
+    text = re.sub(r'[ \t]+', ' ', text)
+    # Bersihkan tiap baris
+    lines = []
+    for line in text.splitlines():
+        line = line.strip()
+        # Hapus baris pemisah: hanya berisi -, =, _, *, |
+        if re.match(r'^[-=_*|#]{3,}$', line):
+            continue
+        lines.append(line)
+    # Kolaps baris kosong berlebihan
+    cleaned = re.sub(r'\n{3,}', '\n\n', '\n'.join(lines))
+    return cleaned.strip()
+
+
+
 def _extract_kv_with_qwen(text: str) -> dict:
     """
     Ekstrak semua informasi dokumen menggunakan Qwen via Ollama.
@@ -510,53 +596,63 @@ def _extract_kv_with_qwen(text: str) -> dict:
     import requests
 
     base_url = os.getenv("QWEN_BASE_URL", "http://localhost:11434")
-    model    = os.getenv("QWEN_MODEL",    "qwen2.5")
+    model    = os.getenv("QWEN_MODEL",    "qwen2.5:latest")
+    timeout  = int(os.getenv("QWEN_TIMEOUT", "300"))
 
-    prompt = (
-        "Ekstrak semua informasi dari dokumen berikut sebagai JSON object "
-        "dengan pasangan kunci:nilai.\n\n"
-        "Aturan:\n"
-        "- Gunakan nama kunci persis seperti yang ada di dokumen\n"
-        "- Untuk nilai yang kosong/blank, jangan include\n"
-        "- Untuk daftar item (misal daftar lampiran), gunakan array string\n"
-        "- Abaikan teks instruksi atau catatan cara pengisian form\n"
-        "- Kembalikan HANYA JSON valid, tanpa penjelasan\n\n"
-        f"Dokumen:\n{text}"
-    )
+    # Potong teks — 2000 karakter cukup untuk sebagian besar dokumen
+    MAX_CHARS = 2000
+    text_for_qwen = text[:MAX_CHARS] + ("\n[dipotong]" if len(text) > MAX_CHARS else "")
+
+    prompt = f"""Extract all key-value information from this document as a flat JSON object.
+
+Rules:
+- Output ONLY valid JSON, nothing else
+- No markdown, no explanation, no code fences
+- Use the exact field names from the document
+- Skip empty/blank fields
+- For lists (e.g. attachments), join with " | "
+- Numbers and dates: keep original format
+
+Output format:
+{{"field1": "value1", "field2": "value2"}}
+
+Document:
+{text_for_qwen}"""
 
     try:
         resp = requests.post(
             f"{base_url}/api/chat",
             json={
-                "model":    model,
-                "messages": [{"role": "user", "content": prompt}],
-                "stream":   False,
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You are a JSON extraction API. Respond ONLY with a single valid JSON object. No markdown, no explanation, no code fences."},
+                    {"role": "user",   "content": prompt},
+                ],
+                "stream":     False,
+                "keep_alive": "10m",
+                "options": {
+                    "temperature": 0,
+                    "num_predict": 800,
+                    "num_ctx":     2048,
+                    "num_gpu":     99,
+                },
             },
-            timeout=120,
+            timeout=timeout,
         )
         resp.raise_for_status()
         response = resp.json()["message"]["content"].strip()
+        print(f"[Qwen] Raw response: {response[:300]}")
 
-        # Hapus markdown code fence jika ada
-        if response.startswith("```"):
-            parts = response.split("```")
-            response = parts[1] if len(parts) > 1 else parts[0]
-            if response.startswith("json"):
-                response = response[4:]
-            response = response.strip()
+        # Cari posisi { pertama lalu parse hanya objek JSON pertama yang valid
+        start = response.find('{')
+        if start == -1:
+            print("[Qwen] Tidak ada JSON ditemukan dalam response")
+            return {}
+        obj, _ = json.JSONDecoder().raw_decode(response, start)
+        return obj
 
-        result = json.loads(response)
-
-        # Flatten: ubah nilai list jadi string gabungan agar mudah ditampilkan
-        flat = {}
-        for k, v in result.items():
-            if isinstance(v, list):
-                flat[k] = ", ".join(str(i) for i in v)
-            elif v is not None and str(v).strip():
-                flat[k] = str(v).strip()
-        return flat
-
-    except Exception:
+    except Exception as e:
+        print(f"[Qwen] Error: {type(e).__name__}: {e}")
         return {}
 
 
