@@ -1,48 +1,76 @@
 # OCR + Parsing Dokumen
 
-Upload dokumen (PDF, DOCX, gambar) → **Docling** baca isinya → **Qwen AI** parse ke JSON → tampil di UI.
-
-Target: dokumen terbaca ≥ 95% akurat.
+Upload dokumen (PDF, Word, Excel, gambar) → **Docling** OCR → **Qwen AI** parse ke JSON → simpan ke **PostgreSQL** → real-time status via **WebSocket**.
 
 ---
 
-## Cara Install
+## Arsitektur
 
-### 1. Python packages
-
-```bash
-pip install -r requirements.txt
+```
+React UI (Vite :5173)
+     │
+     ├── POST /api/upload ──→ Go API (:8080) ──→ MinIO (file storage)
+     │                            │
+     │                            └── Redis Stream (job queue)
+     │                                     │
+     │   WebSocket /ws/jobs/{id} ←── Redis Pub/Sub ←── Python Worker
+     │                                                     │
+     │                                              Docling + Qwen AI
+     │                                                     │
+     └── GET /api/jobs/{id}/result ──→ Go API ──→ PostgreSQL
 ```
 
-Package yang diinstall:
-- `docling` — baca PDF, DOCX, gambar (download model AI ~500 MB saat pertama kali dijalankan)
-- `requests` — HTTP client untuk komunikasi ke Ollama (terinstall otomatis via docling)
+---
+
+## Tech Stack
+
+| Layer | Tech | Port |
+|---|---|---|
+| Frontend | React 18 + Vite + Tailwind | :5173 |
+| Gateway | Go (Fiber) | :8080 |
+| Queue | Redis Streams | :6379 |
+| File Storage | MinIO (S3-compatible) | :9000 |
+| Database | PostgreSQL 16 | :5432 |
+| Worker | Python (Docling + Qwen) | - |
+| AI | Qwen 2.5 via Ollama | :11434 |
+
+---
+
+## Setup
+
+### 1. Infrastruktur (Docker)
+
+```bash
+docker compose up -d
+```
+
+Ini menjalankan Redis, MinIO, dan PostgreSQL. Schema database otomatis dibuat dari `migrations/001_init.sql`.
 
 ### 2. Ollama + Qwen
 
-Ollama menjalankan model Qwen secara lokal — dipakai untuk parsing dokumen ke JSON.
-
-1. Download dan install Ollama dari **ollama.com**
-2. Buka terminal baru, lalu download model Qwen (~4–5 GB):
-   ```bash
-   ollama pull qwen2.5
-   ```
-3. Ollama otomatis berjalan di background di `http://localhost:11434`
-
-> Jika Ollama tidak berjalan saat upload, sistem otomatis fallback ke parsing regex biasa.
-
----
-
-## Cara Jalankan
-
-**Terminal 1 — Python API (FastAPI + Uvicorn):**
 ```bash
-python api.py
-# Berjalan di http://localhost:5000
-# Swagger UI  → http://localhost:5000/docs
+# Install Ollama dari https://ollama.com
+ollama pull qwen2.5
 ```
 
-**Terminal 2 — React dev server:**
+### 3. Go Gateway
+
+```bash
+cd gateway
+go build -o gateway.exe .
+./gateway.exe
+# Berjalan di http://localhost:8080
+```
+
+### 4. Python Worker
+
+```bash
+pip install -r worker/requirements.txt
+python worker/worker.py
+```
+
+### 5. React UI
+
 ```bash
 cd ui
 npm install
@@ -55,50 +83,41 @@ npm run dev
 ## Cara Pakai
 
 1. Buka `http://localhost:5173`
-2. Drag & drop atau klik untuk upload file
-3. Tunggu Docling membaca dokumen
-4. Hasil muncul: konten dokumen + JSON dari Qwen + skor confidence
-
-**Format yang didukung:** PDF, DOCX, PNG, JPG, JPEG, BMP, TIFF, WEBP — maks 20 MB
-
-**Badge di UI:**
-- **Qwen AI** (ungu) — Qwen berhasil parse dokumen ke JSON
-- **regex** (abu) — Ollama tidak aktif, fallback ke regex biasa
+2. Drag & drop file (PDF, Word, Excel, gambar)
+3. Upload langsung ke Go API → file disimpan di MinIO
+4. Worker memproses di background: OCR → Clean → Qwen → DB
+5. UI menampilkan progress real-time via WebSocket
+6. Hasil muncul: key-values, tabel, confidence score
 
 ---
 
-## Opsional: CSV Ground Truth
+## API Endpoints
 
-Untuk mengukur akurasi secara tepat (CER per field):
-
-1. Download template CSV dari tombol di UI
-2. Isi nilai field yang diketahui
-3. Upload bersama dokumen → sistem hitung Character Error Rate per field
+| Method | Path | Deskripsi |
+|---|---|---|
+| POST | `/api/upload` | Upload file, return `{job_id}` |
+| GET | `/api/jobs/:id` | Status job (queued/processing/completed/failed) |
+| GET | `/api/jobs/:id/result` | Hasil lengkap (JSONB dari PostgreSQL) |
+| GET | `/api/jobs` | List 50 job terbaru |
+| WS | `/ws/jobs/:id` | Real-time pipeline status |
 
 ---
 
-## Arsitektur
+## Konfigurasi
 
+Semua config via `.env`:
+
+```env
+REDIS_ADDR=localhost:6379
+MINIO_ENDPOINT=localhost:9000
+MINIO_ACCESS_KEY=minioadmin
+MINIO_SECRET_KEY=minioadmin
+MINIO_BUCKET=documents
+DATABASE_URL=postgres://postgres:postgres@localhost:5432/ocr_parse?sslmode=disable
+QWEN_BASE_URL=http://localhost:11434
+QWEN_MODEL=qwen2.5:latest
+GO_PORT=8080
 ```
-Upload file (PDF / DOCX / gambar)
-           ↓
-        Docling              ← layout analysis, tabel, OCR internal (jika gambar)
-           ↓
-      teks markdown
-           ↓
-    Qwen via Ollama          ← parse teks → JSON dengan rules ketat
-           ↓                   (fallback ke regex jika Ollama tidak aktif)
-       Hasil UI              ← konten dinamis + tabel + skor confidence Docling
-```
-
-**Kenapa Docling?**
-Menangani PDF, DOCX, dan gambar dalam satu pipeline — termasuk layout analysis
-dan OCR internal. Tidak perlu install Tesseract atau preprocessing manual.
-
-**Kenapa Qwen?**
-Regex tidak bisa menangani dokumen yang formatnya bervariasi, nilai multi-baris,
-atau field yang tidak mengikuti pola tertentu. Qwen memahami konteks dokumen
-dan mengekstrak informasi secara natural.
 
 ---
 
@@ -106,45 +125,36 @@ dan mengekstrak informasi secara natural.
 
 ```
 ocr_parse_example/
-├── api.py                       # Flask API server
-├── requirements.txt
-└── src/
-    └── upload_processor.py      # Docling + Qwen AI parsing
-ui/
-└── src/
-    ├── App.jsx                  # Layout utama
-    └── components/
-        └── UploadView.jsx       # UI upload + tampilan hasil
+├── docker-compose.yml        # Redis + MinIO + PostgreSQL
+├── .env                      # Environment variables
+├── gateway/                  # Go API (Fiber)
+│   ├── main.go
+│   └── go.mod
+├── worker/                   # Python worker
+│   ├── worker.py             # Redis Stream consumer
+│   ├── processor.py          # Docling + Qwen pipeline
+│   ├── config.py
+│   └── requirements.txt
+├── migrations/
+│   └── 001_init.sql          # PostgreSQL schema
+└── ui/                       # React frontend
+    └── src/
+        ├── App.jsx
+        ├── components/
+        │   └── UploadView.jsx
+        └── hooks/
+            └── useJobStatus.js  # WebSocket hook
 ```
 
 ---
 
-## Konfigurasi
+## Mode Simpel (tanpa Docker)
 
-### Ganti model Qwen
-
-Default: `qwen2.5`. Model lain yang tersedia di Ollama:
-
-| Model | RAM | Kecepatan | Akurasi |
-|-------|-----|-----------|---------|
-| `qwen2.5:3b` | ~3 GB | Cepat | Cukup |
-| `qwen2.5:latest` (7b) | ~5 GB | Sedang | Baik ✓ default |
-| `qwen2.5:14b` | ~10 GB | Lambat | Lebih baik |
+Untuk development cepat tanpa Go + Redis + MinIO, bisa langsung pakai FastAPI:
 
 ```bash
-# Windows PowerShell
-$env:QWEN_MODEL = "qwen2.5:14b"
 python api.py
+# http://localhost:5000 (FastAPI + Swagger di /docs)
 ```
 
-```bash
-# macOS / Linux
-QWEN_MODEL=qwen2.5:14b python api.py
-```
-
-### Ganti URL Ollama
-
-Jika Ollama berjalan di port berbeda:
-```bash
-QWEN_BASE_URL=http://localhost:11434 python api.py
-```
+Mode ini menjalankan Docling + Qwen secara synchronous dalam satu proses Python.

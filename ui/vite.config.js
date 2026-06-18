@@ -5,9 +5,12 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      // Semua request /api/* dan /images/* diteruskan ke Flask
-      '/api':    'http://localhost:5000',
-      '/images': 'http://localhost:5000',
+      '/api':    'http://localhost:8090',
+      '/images': 'http://localhost:8090',
+      '/ws': {
+        target: 'http://localhost:8090',
+        ws: true,
+      },
     },
   },
 })

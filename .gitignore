@@ -13,6 +13,13 @@ env/
 ui/node_modules/
 ui/dist/
 
+# Go
+gateway/gateway.exe
+gateway/gateway
+
+# Env
+.env
+
 # OS
 .DS_Store
 Thumbs.db

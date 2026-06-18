@@ -1,0 +1,171 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "OCR Parse API",
+    "description": "Upload dokumen → Docling OCR → Qwen AI → PostgreSQL. Real-time status via WebSocket.",
+    "version": "2.0.0"
+  },
+  "servers": [
+    { "url": "http://localhost:8090", "description": "Local gateway" }
+  ],
+  "paths": {
+    "/api/upload": {
+      "post": {
+        "summary": "Upload dokumen",
+        "description": "Upload file → simpan ke MinIO → buat job di Redis Stream. Response langsung dengan job_id (tidak menunggu processing).",
+        "tags": ["Upload"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": ["file"],
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "File dokumen (PDF, DOCX, XLSX, PNG, JPG, dll). Maks 20 MB."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Job berhasil dibuat",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "job_id":   { "type": "string", "format": "uuid" },
+                    "filename": { "type": "string" },
+                    "status":   { "type": "string", "enum": ["queued"] },
+                    "ws_url":   { "type": "string", "example": "/ws/jobs/{job_id}" }
+                  }
+                }
+              }
+            }
+          },
+          "400": { "description": "File tidak valid atau format tidak didukung" },
+          "413": { "description": "File terlalu besar (maks 20 MB)" }
+        }
+      }
+    },
+    "/api/jobs/{id}": {
+      "get": {
+        "summary": "Status job",
+        "description": "Cek status job: queued, processing, completed, atau failed.",
+        "tags": ["Jobs"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Status job",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Job" }
+              }
+            }
+          },
+          "404": { "description": "Job tidak ditemukan" }
+        }
+      }
+    },
+    "/api/jobs/{id}/result": {
+      "get": {
+        "summary": "Hasil job",
+        "description": "Ambil hasil lengkap (JSONB) setelah job completed. Return 202 jika belum selesai.",
+        "tags": ["Jobs"],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "string", "format": "uuid" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hasil dokumen (key_values, tables, confidence, dll)",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/DocumentResult" }
+              }
+            }
+          },
+          "202": { "description": "Job belum selesai" },
+          "404": { "description": "Job tidak ditemukan" }
+        }
+      }
+    },
+    "/api/jobs": {
+      "get": {
+        "summary": "List jobs",
+        "description": "50 job terbaru, diurutkan dari yang terbaru.",
+        "tags": ["Jobs"],
+        "responses": {
+          "200": {
+            "description": "Daftar job",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "jobs":  { "type": "array", "items": { "$ref": "#/components/schemas/Job" } },
+                    "count": { "type": "integer" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id":           { "type": "string", "format": "uuid" },
+          "filename":     { "type": "string" },
+          "file_size":    { "type": "integer" },
+          "status":       { "type": "string", "enum": ["queued", "processing", "completed", "failed"] },
+          "current_step": { "type": "string", "nullable": true },
+          "error":        { "type": "string", "nullable": true },
+          "elapsed_ms":   { "type": "integer", "nullable": true },
+          "created_at":   { "type": "string", "format": "date-time" },
+          "updated_at":   { "type": "string", "format": "date-time" },
+          "completed_at": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "DocumentResult": {
+        "type": "object",
+        "properties": {
+          "filename":       { "type": "string" },
+          "extracted_text":  { "type": "string" },
+          "cleaned_text":    { "type": "string" },
+          "key_values":      { "type": "object", "additionalProperties": { "type": "string" } },
+          "tables":          { "type": "array", "items": { "type": "array" } },
+          "ai_result":       { "type": "object", "nullable": true },
+          "doc_confidence":  { "type": "number" },
+          "tables_found":    { "type": "integer" },
+          "kv_found":        { "type": "integer" },
+          "passes":          { "type": "boolean" },
+          "ai_extraction":   { "type": "boolean" },
+          "pipeline_steps":  { "type": "array" },
+          "elapsed_s":       { "type": "number" }
+        }
+      }
+    }
+  }
+}
