@@ -1,23 +1,19 @@
-# Output pipeline
-output/
-
 # Python
 __pycache__/
 *.pyc
-*.pyo
 .venv/
 venv/
-env/
-
-# Node / React
-ui/node_modules/
-ui/dist/
 
 # Go
 gateway/gateway.exe
 gateway/gateway
 
-# Env
+# Node
+ui/node_modules/
+ui/dist/
+
+# Runtime
+output/
 .env
 
 # OS

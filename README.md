@@ -116,7 +116,7 @@ MINIO_BUCKET=documents
 DATABASE_URL=postgres://postgres:postgres@localhost:5432/ocr_parse?sslmode=disable
 QWEN_BASE_URL=http://localhost:11434
 QWEN_MODEL=qwen2.5:latest
-GO_PORT=8080
+GO_PORT=8090
 ```
 
 ---
@@ -129,7 +129,8 @@ ocr_parse_example/
 ├── .env                      # Environment variables
 ├── gateway/                  # Go API (Fiber)
 │   ├── main.go
-│   └── go.mod
+│   ├── go.mod
+│   └── openapi.json
 ├── worker/                   # Python worker
 │   ├── worker.py             # Redis Stream consumer
 │   ├── processor.py          # Docling + Qwen pipeline
@@ -146,15 +147,3 @@ ocr_parse_example/
             └── useJobStatus.js  # WebSocket hook
 ```
 
----
-
-## Mode Simpel (tanpa Docker)
-
-Untuk development cepat tanpa Go + Redis + MinIO, bisa langsung pakai FastAPI:
-
-```bash
-python api.py
-# http://localhost:5000 (FastAPI + Swagger di /docs)
-```
-
-Mode ini menjalankan Docling + Qwen secara synchronous dalam satu proses Python.

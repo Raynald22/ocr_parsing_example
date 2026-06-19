@@ -1,7 +1,6 @@
 import { useState, useRef, useCallback } from 'react'
 import { useJobStatus } from '../hooks/useJobStatus'
 
-// ── Konstanta ──────────────────────────────────────────────────────────────────
 
 const ACCEPTED_IMG = '.png,.jpg,.jpeg,.bmp,.tiff,.tif,.webp'
 const ACCEPTED_DOC = '.pdf,.docx,.doc,.xlsx,.xls'
@@ -23,7 +22,6 @@ const fileIcon = (name = '') => {
   return '📄'
 }
 
-// ── Komponen utama ─────────────────────────────────────────────────────────────
 
 export default function UploadView() {
   const [dragOver, setDragOver] = useState(false)
@@ -62,7 +60,7 @@ export default function UploadView() {
   return (
     <div className="flex flex-col gap-5">
 
-      {/* ── Drop Zone ──────────────────────────────────────────────────────── */}
+
       <div
         onDrop={onDrop}
         onDragOver={onDragOver}
@@ -110,7 +108,7 @@ export default function UploadView() {
               </div>
             </div>
 
-            {/* Live pipeline steps */}
+
             {steps.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap justify-center">
                 {steps.map((s) => (
@@ -146,7 +144,7 @@ export default function UploadView() {
         )}
       </div>
 
-      {/* ── Error ──────────────────────────────────────────────────────────── */}
+
       {error && (
         <div className="flex items-start gap-2 bg-red-50 border border-red-200 rounded-xl px-4 py-3 text-sm text-red-700">
           <span className="shrink-0 mt-0.5">⚠</span>
@@ -157,7 +155,7 @@ export default function UploadView() {
         </div>
       )}
 
-      {/* ── Hasil ──────────────────────────────────────────────────────────── */}
+
       {status === 'completed' && result && (
         <DocResult result={result} localPreview={preview} onReset={handleReset} />
       )}
@@ -165,7 +163,6 @@ export default function UploadView() {
   )
 }
 
-// ── Hasil dokumen ──────────────────────────────────────────────────────────────
 
 function DocResult({ result, localPreview, onReset }) {
   const {
@@ -181,7 +178,7 @@ function DocResult({ result, localPreview, onReset }) {
   return (
     <div className="flex flex-col gap-4">
 
-      {/* ── Header ───────────────────────────────────────────────────────── */}
+
       <div className="bg-white border border-slate-200 rounded-2xl p-4 flex items-center gap-4 shadow-sm">
         {imgSrc ? (
           <img src={imgSrc} alt={filename}
@@ -208,10 +205,10 @@ function DocResult({ result, localPreview, onReset }) {
         </button>
       </div>
 
-      {/* ── Pipeline steps ───────────────────────────────────────────────── */}
+
       {pipeline_steps?.length > 0 && <PipelineSteps steps={pipeline_steps} />}
 
-      {/* ── Grid konten + skor ───────────────────────────────────────────── */}
+
       <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
         <div className="lg:col-span-3">
           <DocContentPanel
@@ -231,7 +228,7 @@ function DocResult({ result, localPreview, onReset }) {
         </div>
       </div>
 
-      {/* ── Teks terekstrak ──────────────────────────────────────────────── */}
+
       {extracted_text && (
         <details className="bg-white rounded-xl border border-slate-200 shadow-sm group">
           <summary className="px-4 py-3 cursor-pointer text-sm font-semibold text-slate-700 select-none flex items-center gap-2">
@@ -248,7 +245,6 @@ function DocResult({ result, localPreview, onReset }) {
   )
 }
 
-// ── Pipeline Steps ─────────────────────────────────────────────────────────────
 
 const STATUS_STYLE = {
   ok:       { ring: 'ring-green-400  bg-green-50',  text: 'text-green-600',  icon: '✓' },
@@ -302,7 +298,6 @@ function PipelineSteps({ steps }) {
   )
 }
 
-// ── Panel konten ───────────────────────────────────────────────────────────────
 
 function DocContentPanel({ keyValues, tables, aiExtraction }) {
   const kvEntries = Object.entries(keyValues)
@@ -376,7 +371,6 @@ function DocContentPanel({ keyValues, tables, aiExtraction }) {
   )
 }
 
-// ── Score Card ─────────────────────────────────────────────────────────────────
 
 function DocScoreCard({ confidence, passes, kvFound, tablesFound, aiExtraction }) {
   const confStr = confidence != null ? confidence.toFixed(1) + '%' : '—'
@@ -429,7 +423,6 @@ function StatRow({ label, value, accent = false }) {
   )
 }
 
-// ── Badge ──────────────────────────────────────────────────────────────────────
 
 const BADGE_COLORS = {
   blue:   'bg-blue-100   text-blue-700   border-blue-200',
