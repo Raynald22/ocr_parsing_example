@@ -2,12 +2,11 @@ import { useState, useRef, useCallback } from 'react'
 import { useJobStatus } from '../hooks/useJobStatus'
 
 
-const ACCEPTED_IMG = '.png,.jpg,.jpeg,.bmp,.tiff,.tif,.webp'
-const ACCEPTED_DOC = '.pdf,.docx,.doc,.xlsx,.xls'
-const ACCEPTED     = ACCEPTED_IMG + ',' + ACCEPTED_DOC
-const MAX_MB       = 20
+const ACCEPT_DOCUMENT = '.pdf,.docx,.doc,.png,.jpg,.jpeg,.bmp,.tiff,.tif,.webp'
+const MAX_MB          = 20
 
 const IMAGE_EXTS = new Set(['.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'])
+
 const isImage = (file) => {
   if (!file?.name) return false
   return IMAGE_EXTS.has('.' + file.name.split('.').pop().toLowerCase())
@@ -16,7 +15,6 @@ const isImage = (file) => {
 const fileIcon = (name = '') => {
   const ext = name.split('.').pop().toLowerCase()
   if (ext === 'pdf')                                                    return '📕'
-  if (['xlsx', 'xls'].includes(ext))                                  return '📗'
   if (['docx', 'doc'].includes(ext))                                  return '📘'
   if (['png','jpg','jpeg','bmp','tiff','tif','webp'].includes(ext))  return '🖼️'
   return '📄'
@@ -27,7 +25,7 @@ export default function UploadView() {
   const [dragOver, setDragOver] = useState(false)
   const [preview,  setPreview]  = useState(null)
   const [fileName, setFileName] = useState(null)
-  const inputRef = useRef(null)
+  const docInputRef   = useRef(null)
 
   const { status, step, steps, result, error, upload, reset, jobId } = useJobStatus()
 
@@ -50,7 +48,7 @@ export default function UploadView() {
     reset()
     setPreview(null)
     setFileName(null)
-    if (inputRef.current) inputRef.current.value = ''
+    if (docInputRef.current) docInputRef.current.value = ''
   }
 
   const onDrop     = (e) => { e.preventDefault(); setDragOver(false); handleFile(e.dataTransfer.files[0]) }
@@ -60,30 +58,22 @@ export default function UploadView() {
   return (
     <div className="flex flex-col gap-5">
 
+      <input ref={docInputRef} type="file" accept={ACCEPT_DOCUMENT} className="hidden" onChange={e => handleFile(e.target.files[0])} />
 
       <div
         onDrop={onDrop}
         onDragOver={onDragOver}
         onDragLeave={onDragLeave}
-        onClick={() => !processing && inputRef.current?.click()}
         className={`
-          relative border-2 border-dashed rounded-2xl cursor-pointer select-none
+          relative border-2 border-dashed rounded-2xl select-none
           transition-all duration-200
           ${dragOver
             ? 'border-blue-400 bg-blue-50 scale-[1.01]'
-            : 'border-slate-300 bg-white hover:border-blue-300 hover:bg-slate-50'
+            : 'border-slate-300 bg-white'
           }
           ${processing ? 'cursor-not-allowed' : ''}
         `}
       >
-        <input
-          ref={inputRef}
-          type="file"
-          accept={ACCEPTED}
-          className="hidden"
-          onChange={e => handleFile(e.target.files[0])}
-        />
-
         {processing ? (
           <div className="flex flex-col items-center gap-4 py-12 px-6">
             {preview && (
@@ -108,7 +98,6 @@ export default function UploadView() {
               </div>
             </div>
 
-
             {steps.length > 0 && (
               <div className="flex items-center gap-2 flex-wrap justify-center">
                 {steps.map((s) => (
@@ -128,18 +117,19 @@ export default function UploadView() {
             )}
           </div>
         ) : (
-          <div className="flex flex-col items-center gap-3 py-10 px-6">
-            <div className="flex gap-2 text-3xl">
-              <span>📕</span><span>📗</span><span>📘</span><span>🖼️</span>
-            </div>
-            <div className="text-center">
-              <p className="font-semibold text-slate-700">Drag &amp; drop atau klik untuk pilih file</p>
-              <p className="text-xs text-slate-500 mt-1">
-                <span className="font-medium">PDF</span> · <span className="font-medium">Word</span> ·{' '}
-                <span className="font-medium">Excel</span> · <span className="font-medium">Gambar</span>
-              </p>
-              <p className="text-xs text-slate-400 mt-1">Maks {MAX_MB} MB</p>
-            </div>
+          <div className="flex flex-col items-center gap-4 py-10 px-6">
+            <p className="text-sm text-slate-500">Drag &amp; drop file ke sini, atau pilih file:</p>
+            <button
+              onClick={() => docInputRef.current?.click()}
+              className="flex items-center gap-2 px-5 py-3 rounded-xl border-2 border-blue-200 bg-blue-50 hover:bg-blue-100 hover:border-blue-300 transition-colors"
+            >
+              <span className="text-2xl">📕</span>
+              <div className="text-left">
+                <p className="text-sm font-semibold text-blue-800">PDF / Word / Gambar</p>
+                <p className="text-xs text-blue-500">.pdf .docx .doc .png .jpg .tiff</p>
+              </div>
+            </button>
+            <p className="text-xs text-slate-400">Maks {MAX_MB} MB</p>
           </div>
         )}
       </div>
@@ -164,16 +154,20 @@ export default function UploadView() {
 }
 
 
-function DocResult({ result, localPreview, onReset }) {
+export function DocResult({ result, localPreview, onReset }) {
   const {
-    filename, elapsed_s, doc_confidence,
-    extracted_text, tables, key_values,
-    ai_result, tables_found, kv_found,
-    passes, ai_extraction, pipeline_steps,
-    image_url,
+    document_type, confidence, needs_review,
+    data, review, meta = {}, raw = {},
   } = result
+  const { filename, elapsed_s, doc_confidence, ai_extraction, pipeline_steps = [] } = meta
+  const { extracted_text, tables = [], key_values = {} } = raw
 
-  const imgSrc = image_url ? `/images/${image_url}` : localPreview
+  const isStructured = document_type && document_type !== 'generic'
+  const validation = review
+    ? { confidence, needs_review, threshold: review.threshold, summary: review, issues: review.issues }
+    : null
+
+  const imgSrc = localPreview
 
   return (
     <div className="flex flex-col gap-4">
@@ -206,27 +200,39 @@ function DocResult({ result, localPreview, onReset }) {
       </div>
 
 
+      {validation && <ValidationCard validation={validation} />}
+
+
       {pipeline_steps?.length > 0 && <PipelineSteps steps={pipeline_steps} />}
 
 
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
-        <div className="lg:col-span-3">
-          <DocContentPanel
-            keyValues={key_values ?? {}}
-            tables={tables ?? []}
-            aiExtraction={ai_extraction}
-          />
-        </div>
-        <div className="lg:col-span-2">
-          <DocScoreCard
-            confidence={doc_confidence}
-            passes={passes}
-            kvFound={kv_found}
-            tablesFound={tables_found}
-            aiExtraction={ai_extraction}
-          />
-        </div>
-      </div>
+      {isStructured
+        ? <StructuredPanel docType={document_type} data={data} tables={tables} />
+        : <DocContentPanel keyValues={data ?? {}} tables={tables} aiExtraction={ai_extraction} />
+      }
+
+
+      {isStructured && Object.keys(key_values).length > 0 && (
+        <details className="bg-white rounded-xl border border-slate-200 shadow-sm group">
+          <summary className="px-4 py-3 cursor-pointer text-sm font-semibold text-slate-700 select-none flex items-center gap-2">
+            <span className="text-slate-400 group-open:rotate-90 transition-transform inline-block">▶</span>
+            Field Mentah (flat)
+            <span className="font-normal text-slate-400 text-xs">({Object.keys(key_values).length} field)</span>
+          </summary>
+          <div className="border-t border-slate-100 overflow-auto max-h-72">
+            <table className="w-full text-xs">
+              <tbody>
+                {Object.entries(key_values).map(([k, v], i) => (
+                  <tr key={k} className={i % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+                    <td className="px-4 py-1.5 text-slate-500 font-medium align-top break-words w-2/5">{k}</td>
+                    <td className="px-4 py-1.5 text-slate-800 font-mono align-top break-words">{String(v)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </details>
+      )}
 
 
       {extracted_text && (
@@ -372,53 +378,212 @@ function DocContentPanel({ keyValues, tables, aiExtraction }) {
 }
 
 
-function DocScoreCard({ confidence, passes, kvFound, tablesFound, aiExtraction }) {
-  const confStr = confidence != null ? confidence.toFixed(1) + '%' : '—'
-  const pct = confidence != null ? Math.min(confidence, 100) : 0
+function ValidationCard({ validation }) {
+  const { confidence, needs_review, threshold, summary, issues } = validation
+  const ok = !needs_review
+  const t = ok
+    ? { border: 'border-green-200', bg: 'bg-green-50', text: 'text-green-700', bar: 'bg-green-500', badge: 'bg-green-200 text-green-800' }
+    : { border: 'border-amber-300', bg: 'bg-amber-50', text: 'text-amber-700', bar: 'bg-amber-500', badge: 'bg-amber-200 text-amber-800' }
+
+  const ordered = [...issues].sort((a, b) => (a.level === 'error' ? 0 : 1) - (b.level === 'error' ? 0 : 1))
 
   return (
-    <div className={`rounded-xl border shadow-sm flex flex-col h-full ${
-      passes ? 'border-green-200 bg-green-50' : 'border-amber-200 bg-amber-50'
-    }`}>
-      <div className={`px-4 py-2.5 border-b font-semibold text-sm ${
-        passes ? 'border-green-200 text-green-800' : 'border-amber-200 text-amber-800'
-      }`}>
-        Skor Kualitas
-      </div>
-      <div className="px-4 py-5 flex flex-col gap-4 flex-1">
-        <div className="text-center">
-          <p className={`text-5xl font-black tracking-tight ${passes ? 'text-green-700' : 'text-amber-700'}`}>
-            {confStr}
+    <div className={`rounded-2xl border shadow-sm p-4 ${t.border} ${t.bg}`}>
+      <div className="flex items-center gap-4">
+        <div className="shrink-0 text-center w-20">
+          <p className={`text-4xl font-black tracking-tight ${t.text}`}>{confidence.toFixed(1)}%</p>
+          <p className="text-[11px] text-slate-500">confidence</p>
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className={`text-xs font-bold px-3 py-1 rounded-full ${t.badge}`}>
+              {ok ? `✓ AUTO-PASS (≥${threshold}%)` : `⚠ PERLU VERIFIKASI (<${threshold}%)`}
+            </span>
+            {summary.critical_errors > 0 && (
+              <span className="text-xs font-bold text-red-600">{summary.critical_errors} critical</span>
+            )}
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            {summary.errors} error · {summary.warnings} warning · {summary.fields_scored} field dinilai
           </p>
-          <p className="text-xs text-slate-500 mt-1">Docling Confidence</p>
-          {confidence != null && (
-            <div className="mt-3 bg-white/70 rounded-full h-2 overflow-hidden">
-              <div className={`h-2 rounded-full transition-all duration-700 ${passes ? 'bg-green-500' : 'bg-amber-500'}`}
-                style={{ width: pct + '%' }} />
-            </div>
-          )}
-          <span className={`mt-3 inline-block text-xs font-bold px-3 py-1 rounded-full ${
-            passes ? 'bg-green-200 text-green-800' : 'bg-amber-200 text-amber-800'
-          }`}>
-            {passes ? '✓ LULUS (≥95%)' : '✗ PERLU PERBAIKAN (<95%)'}
-          </span>
+          <div className="mt-2 bg-white/70 rounded-full h-2 overflow-hidden">
+            <div className={`h-2 rounded-full ${t.bar}`} style={{ width: Math.min(confidence, 100) + '%' }} />
+          </div>
         </div>
+      </div>
 
-        <div className="bg-white/70 rounded-lg divide-y divide-slate-100 border border-slate-100 text-sm">
-          <StatRow label="Sumber" value={aiExtraction ? 'Qwen AI' : 'Regex'} accent={aiExtraction} />
-          <StatRow label="Key-values" value={kvFound ?? 0} />
-          <StatRow label="Tabel" value={tablesFound ?? 0} />
+      {ordered.length > 0 && (
+        <div className="mt-3 border-t border-slate-200/70 pt-3 flex flex-col gap-1 max-h-48 overflow-auto">
+          {ordered.map((it, i) => (
+            <div key={i} className="flex items-start gap-2 text-xs">
+              <span className={it.level === 'error' ? 'text-red-500' : 'text-amber-500'}>
+                {it.level === 'error' ? '✕' : '⚠'}
+              </span>
+              <span className="font-mono text-slate-500 shrink-0 break-all">{it.field}</span>
+              <span className="text-slate-600 min-w-0">{it.message}</span>
+            </div>
+          ))}
         </div>
+      )}
+    </div>
+  )
+}
+
+
+const DOC_TYPE_LABEL = {
+  invoice:        'Invoice',
+  packing_list:   'Packing List',
+  bill_of_lading: 'Bill of Lading',
+  generic:        'Dokumen',
+}
+
+const prettyKey = (k) => k.replace(/_/g, ' ')
+const fmtValue  = (v) =>
+  typeof v === 'number' ? v.toLocaleString('en-US') : String(v)
+
+const isEmpty = (v) =>
+  v == null || v === '' || v === '-' ||
+  (Array.isArray(v) && v.length === 0) ||
+  (typeof v === 'object' && !Array.isArray(v) && Object.values(v).every(isEmpty))
+
+
+function StructuredPanel({ docType, data, tables }) {
+  const records = Array.isArray(data) ? data : [data]
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 shadow-sm overflow-hidden flex flex-col h-full">
+      <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-2">
+          <p className="text-sm font-semibold text-slate-700">Data Terstruktur</p>
+          <Badge color="violet">{DOC_TYPE_LABEL[docType] ?? docType}</Badge>
+        </div>
+        {records.length > 1 && (
+          <span className="text-xs text-slate-400">{records.length} dokumen</span>
+        )}
+      </div>
+
+      <div className="overflow-auto flex-1 flex flex-col gap-3 p-3">
+        {records.map((rec, i) => (
+          <RecordCard key={i} record={rec} index={records.length > 1 ? i + 1 : null} />
+        ))}
+
+        {tables.length > 0 && (
+          <details className="rounded-lg border border-slate-200 group">
+            <summary className="px-3 py-2 cursor-pointer text-xs font-semibold text-slate-500 uppercase tracking-wide select-none">
+              Tabel mentah ({tables.length})
+            </summary>
+            <div className="px-3 pb-3">
+              {tables.map((tbl, ti) => (
+                <div key={ti} className="mb-3 overflow-x-auto rounded border border-slate-200">
+                  <table className="text-xs border-collapse w-full">
+                    <tbody>
+                      {tbl.slice(0, 10).map((row, ri) => (
+                        <tr key={ri} className={ri === 0 ? 'bg-slate-100 font-semibold' : ri % 2 === 0 ? 'bg-white' : 'bg-slate-50'}>
+                          {row.map((cell, ci) => (
+                            <td key={ci} className="border border-slate-200 px-2 py-1 whitespace-nowrap">{cell}</td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ))}
+            </div>
+          </details>
+        )}
       </div>
     </div>
   )
 }
 
-function StatRow({ label, value, accent = false }) {
+
+function RecordCard({ record, index }) {
+  const entries = Object.entries(record || {})
+  const scalars = entries.filter(([, v]) => v == null || typeof v !== 'object')
+  const objects = entries.filter(([, v]) => v && typeof v === 'object' && !Array.isArray(v))
+  const arrays  = entries.filter(([, v]) => Array.isArray(v))
+
   return (
-    <div className="flex justify-between items-center px-3 py-2 text-xs">
-      <span className="text-slate-500">{label}</span>
-      <span className={`font-semibold ${accent ? 'text-violet-700' : 'text-slate-700'}`}>{String(value)}</span>
+    <div className="rounded-lg border border-slate-200 overflow-hidden">
+      {index != null && (
+        <div className="px-3 py-1.5 bg-violet-50 border-b border-violet-100 text-xs font-semibold text-violet-700">
+          Dokumen #{index}
+        </div>
+      )}
+
+      <FieldGrid fields={scalars} />
+
+      {objects.map(([name, obj]) => (
+        isEmpty(obj) ? null : (
+          <div key={name} className="border-t border-slate-100">
+            <p className="px-3 pt-2 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">{prettyKey(name)}</p>
+            <FieldGrid fields={Object.entries(obj)} />
+          </div>
+        )
+      ))}
+
+      {arrays.map(([name, rows]) => (
+        rows.length === 0 ? null : (
+          <div key={name} className="border-t border-slate-100">
+            <p className="px-3 pt-2 pb-1 text-[11px] font-semibold text-slate-400 uppercase tracking-wide">
+              {prettyKey(name)} <span className="text-slate-300">({rows.length})</span>
+            </p>
+            <ItemsTable rows={rows} />
+          </div>
+        )
+      ))}
+    </div>
+  )
+}
+
+
+function FieldGrid({ fields }) {
+  const shown = fields.filter(([, v]) => !isEmpty(v))
+  if (shown.length === 0) return null
+
+  return (
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4">
+      {shown.map(([k, v]) => (
+        <div key={k} className="flex gap-2 px-3 py-1.5 text-xs border-b border-slate-50 last:border-0 min-w-0">
+          <span className="text-slate-400 shrink-0 w-32 truncate">{prettyKey(k)}</span>
+          <span className="text-slate-800 font-medium break-words min-w-0">{fmtValue(v)}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+
+function ItemsTable({ rows }) {
+  const cols = [...rows.reduce((set, r) => {
+    Object.keys(r || {}).forEach(k => set.add(k))
+    return set
+  }, new Set())]
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-xs border-collapse">
+        <thead>
+          <tr className="bg-slate-50 text-slate-500">
+            {cols.map(c => (
+              <th key={c} className="text-left px-2 py-1.5 font-semibold uppercase tracking-wide whitespace-nowrap border-b border-slate-200">
+                {prettyKey(c)}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-slate-50/60'}>
+              {cols.map(c => (
+                <td key={c} className="px-2 py-1.5 text-slate-700 align-top whitespace-nowrap border-b border-slate-50">
+                  {isEmpty(row[c]) ? <span className="text-slate-300">—</span> : fmtValue(row[c])}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   )
 }

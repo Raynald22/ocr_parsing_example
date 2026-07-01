@@ -19,7 +19,8 @@ export function useJobStatus() {
     try {
       const res = await fetch(`/api/jobs/${id}/result`)
       if (!res.ok) throw new Error('Failed to fetch result')
-      setResult(await res.json())
+      const env = await res.json()
+      setResult(env.data)
     } catch (e) {
       setError(e.message)
     }
@@ -62,11 +63,11 @@ export function useJobStatus() {
 
     try {
       const res = await fetch('/api/upload', { method: 'POST', body: form })
-      const data = await res.json()
-      if (!res.ok) { setError(data.error || 'Upload failed'); setStatus('failed'); return }
-      setJobId(data.job_id)
+      const env = await res.json()
+      if (!res.ok) { setError(env.error?.message || 'Upload failed'); setStatus('failed'); return }
+      setJobId(env.data.job_id)
       setStatus('queued')
-      connectWS(data.job_id)
+      connectWS(env.data.job_id)
     } catch {
       setError('Cannot connect to server')
       setStatus('failed')

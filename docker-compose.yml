@@ -31,7 +31,19 @@ services:
       - pg_data:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
 
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    ports:
+      - "5672:5672"     # AMQP (message bus)
+      - "15672:15672"   # management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: guest
+      RABBITMQ_DEFAULT_PASS: guest
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
 volumes:
   redis_data:
   minio_data:
   pg_data:
+  rabbitmq_data:

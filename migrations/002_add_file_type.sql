@@ -1,0 +1,1 @@
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS file_type VARCHAR(20) DEFAULT 'document';
